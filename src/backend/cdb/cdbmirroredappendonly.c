@@ -24,6 +24,7 @@
 #include "cdb/cdbfilerepprimary.h"
 #include "cdb/cdbmirroredappendonly.h"
 #include "storage/fd.h"
+#include "storage/alluxiofs.h"
 #include "catalog/catalog.h"
 #include "cdb/cdbpersistenttablespace.h"
 #include "cdb/cdbfilerepprimary.h"
@@ -33,6 +34,7 @@
 #include "cdb/cdbpersistentfilesysobj.h"
 #include "cdb/cdbpersistentstore.h"
 #include "cdb/cdbpersistentrecovery.h"
+#include "cdb/cdbvars.h"
 
 static void MirroredAppendOnly_SetUpMirrorAccess(
 	RelFileNode					*relFileNode,
@@ -400,16 +402,18 @@ static void MirroredAppendOnly_DoOpen(
 		 * Do the primary work first so we don't leave files on the mirror or have an
 		 * open to clean up.
 		 */
-		FormDatabasePath(
+		if(segmentFileNum == 0)
+		{
+			FormDatabasePath(
 					dbPath,
 					primaryFilespaceLocation,
 					relFileNode->spcNode,
 					relFileNode->dbNode);
 
-		if (segmentFileNum == 0)
 			sprintf(path, "%s/%u", dbPath, relFileNode->relNode);
+		}
 		else
-			sprintf(path, "%s/%u.%u", dbPath, relFileNode->relNode, segmentFileNum);
+			sprintf(path, "http://%s/%u/%u/%u",alluxio_url,relFileNode->spcNode , relFileNode->relNode, segmentFileNum);
 
 		errno = 0;
 
@@ -1999,19 +2003,25 @@ static void MirroredAppendOnly_DoDrop(
 						 relFileNode->dbNode);
 
 		if (segmentFileNum == 0)
-			sprintf(path, "%s/%u", dbPath, relFileNode->relNode);
-		else
-			sprintf(path, "%s/%u.%u", dbPath, relFileNode->relNode, segmentFileNum);
-
-		errno = 0;
-
-		if (unlink(path) < 0)
 		{
-			*primaryError = errno;
-		}
+			sprintf(path, "%s/%u", dbPath, relFileNode->relNode);
+			errno = 0;
 
+			if (unlink(path) < 0)
+			{
+				*primaryError = errno;
+			}
+
+
+		}
+		else
+		{
+			sprintf(path,"http://%s/%u/%u",alluxio_url,relFileNode->spcNode,relFileNode->relNode);
+			alluxioDelete(path,true);
+		}
 		pfree(dbPath);
 		pfree(path);
+
 	}
 
 	if (StorageManagerMirrorMode_SendToMirror(mirrorMode) &&

@@ -114,7 +114,9 @@ MakeAOSegmentFileName(
 	int32   fileSegNoLocal;
 	
 	/* Get base path for this relation file */
-	basepath = relpath(rel->rd_node);
+	int pathlen = 30;
+	basepath = (char *) palloc0(pathlen);
+	snprintf(basepath, pathlen, "alluxio:%u/%u", rel->rd_node.dbNode, rel->rd_node.relNode);
 
 	FormatAOSegmentFileName(basepath, segno, col, &fileSegNoLocal, filepathname);
 	
