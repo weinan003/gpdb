@@ -1,5 +1,6 @@
 #include "postgres.h"
 
+#include "cdb/cdbvars.h"
 #include "access/extprotocol.h"
 #include "access/xact.h"
 #include "catalog/pg_exttable.h"
@@ -51,8 +52,8 @@ Datum alluxio_export(PG_FUNCTION_ARGS) {
         resHandle = createGpalluxioHander();
 
         const char* url = EXTPROTOCOL_GET_URL(fcinfo);
-        resHandle->url = palloc0(strlen(url));
-        sprintf(resHandle->url,"http://%s",url + 10);
+        resHandle->url = palloc0(strlen(url) + 4);
+        sprintf(resHandle->url,"http://%s/%d",url + 10,GpIdentity.segindex);
 
         AlluxioConnectDir(resHandle);
 
@@ -96,8 +97,8 @@ Datum alluxio_import(PG_FUNCTION_ARGS)
         resHandle = createGpalluxioHander();
 
         const char* url = EXTPROTOCOL_GET_URL(fcinfo);
-        resHandle->url = palloc0(strlen(url));
-        sprintf(resHandle->url,"http://%s",url + 10);
+        resHandle->url = palloc0(strlen(url) + 4);
+        sprintf(resHandle->url,"http://%s/%d",url + 10,GpIdentity.segindex);
 
         AlluxioConnectDir(resHandle);
         resHandle->blockiter = list_head(resHandle->blocksinfo);
