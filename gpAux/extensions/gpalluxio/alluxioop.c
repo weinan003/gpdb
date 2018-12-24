@@ -132,7 +132,7 @@ void AlluxioConnectDir(alluxioHandler *handler)
 
 void AlluxioDisconnectDir(alluxioHandler *handler)
 {
-    AlluxioFileSync(handler);
+    AlluxioSync(handler);
 
     ListCell *lc = NULL;
     foreach(lc,handler->blocksinfo)
@@ -189,7 +189,7 @@ int32 AlluxioWrite(alluxioHandler *handler,char *buffer,int32 length)
     (((alluxioBlock*)lfirst(handler->blockiter))->length + length> ALLUXIO_CACHE_SZ)
     )
     {
-        AlluxioFileSync(handler);
+        AlluxioSync(handler);
     }
 
     if(!handler->blockiter || !((alluxioBlock*)lfirst(handler->blockiter))->writable )
@@ -222,7 +222,7 @@ int32 AlluxioWrite(alluxioHandler *handler,char *buffer,int32 length)
     return returnCode;
 }
 
-void AlluxioFileSync(alluxioHandler *handler){
+void AlluxioSync(alluxioHandler *handler){
 
     if(handler->blockiter
             && (((alluxioBlock*)lfirst(handler->blockiter))->streammingid))

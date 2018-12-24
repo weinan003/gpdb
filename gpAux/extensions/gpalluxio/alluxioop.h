@@ -30,6 +30,6 @@ int32 AlluxioRead(alluxioHandler *handler,char *buffer,int32 length);
 
 int32 AlluxioWrite(alluxioHandler *handler,char *buffer,int32 length);
 
-void AlluxioFileSync(alluxioHandler *handler);
+void AlluxioSync(alluxioHandler *handler);
 
 #endif
