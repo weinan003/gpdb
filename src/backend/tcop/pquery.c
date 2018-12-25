@@ -41,7 +41,6 @@
 #include "cdb/memquota.h"
 #include "executor/spi.h"
 #include "utils/metrics_utils.h"
-#include "storage/alluxiofs.h"
 
 
 /*
@@ -966,7 +965,6 @@ PortalRun(Portal portal, int64 count, bool isTopLevel,
 	saveResourceOwner = CurrentResourceOwner;
 	savePortalContext = PortalContext;
 	saveMemoryContext = CurrentMemoryContext;
-	alluxioInit();
 	PG_TRY();
 	{
 		ActivePortal = portal;
@@ -1067,7 +1065,6 @@ PortalRun(Portal portal, int64 count, bool isTopLevel,
 		PG_RE_THROW();
 	}
 	PG_END_TRY();
-	alluxioDestory();
 
 	if (saveMemoryContext == saveTopTransactionContext)
 		MemoryContextSwitchTo(TopTransactionContext);

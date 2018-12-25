@@ -244,8 +244,6 @@ char	   *pgstat_temp_directory;
 
 char	   *application_name;
 
-char		*alluxio_url;
-
 int			tcp_keepalives_idle;
 int			tcp_keepalives_interval;
 int			tcp_keepalives_count;
@@ -2670,14 +2668,7 @@ static struct config_string ConfigureNamesString[] =
 		&application_name,
 		"", assign_application_name, NULL
 	},
-	{
-		{"alluxio_url", PGC_POSTMASTER, PRESET_OPTIONS,
-				gettext_noop("alluxio url"),
-				NULL
-				},
-			&alluxio_url,
-			"localhost:39999/api/v1/paths//gpdb",NULL,NULL
-	},
+
 	{
 		{"external_pid_file", PGC_POSTMASTER, FILE_LOCATIONS,
 			gettext_noop("Writes the postmaster PID to the specified file."),

@@ -323,17 +323,6 @@ SetNextFileSegForRead(AppendOnlyScanDesc scan)
 
 	Assert(scan->initedStorageRoutines);
 
-	if(segno)
-	{
-	    char * path = palloc0(MAXPGPATH);
-	    sprintf(path,"http://%s/%u/%u/%u",alluxio_url,reln->rd_node.spcNode,reln->rd_node.relNode,segno);
-		AppendOnlyStorageRead_OpenFile(
-				&scan->storageRead,
-				path,
-				formatversion,
-				eof);
-	}
-	else
 	AppendOnlyStorageRead_OpenFile(
 								   &scan->storageRead,
 								   scan->aos_filenamepath,
@@ -1680,7 +1669,7 @@ appendonly_beginrangescan_internal(Relation relation,
 	/*
 	 * initialize the scan descriptor
 	 */
-	scan->aos_filenamepath_maxlen = MAXPGPATH;
+	scan->aos_filenamepath_maxlen = AOSegmentFilePathNameLen(relation) + 1;
 	scan->aos_filenamepath = (char *) palloc(scan->aos_filenamepath_maxlen);
 	scan->aos_filenamepath[0] = '\0';
 	scan->usableBlockSize = AppendOnlyStorage_GetUsableBlockSize(relation->rd_appendonly->blocksize);

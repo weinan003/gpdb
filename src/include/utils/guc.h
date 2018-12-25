@@ -349,7 +349,6 @@ extern char *IdentFileName;
 extern char *external_pid_file;
 
 extern char *application_name;
-extern char *alluxio_url;
 
 extern char *Debug_dtm_action_sql_command_tag;
 extern char *Debug_dtm_action_str;

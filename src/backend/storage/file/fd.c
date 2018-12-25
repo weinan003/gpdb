@@ -76,9 +76,7 @@
 #include "utils/resowner.h"
 #include "utils/workfile_mgr.h"
 #include "utils/faultinjector.h"
-#include "storage/alluxiofs.h"
-#include <curl/curl.h>
-#include <json-c/json.h>
+
 // Provide some indirection here in case we have problems with lseek and
 // 64 bits on some platforms
 #define pg_lseek64(a,b,c) (int64)lseek(a,b,c)
@@ -129,7 +127,6 @@ int			max_files_per_process = 1000;
  */
 static int	max_safe_fds = 32;	/* default if not changed */
 
-extern struct _alluxioCache alluxioCache ;
 
 /* Debugging.... */
 
@@ -144,19 +141,13 @@ extern struct _alluxioCache alluxioCache ;
 #define FileIsValid(file) \
 	((file) > 0 && (file) < (int) SizeVfdCache && VfdCache[file].fileName != NULL)
 
-#define FileIsNotOpen(file) (VfdCache[file].fd == VFD_CLOSED && VfdCache[file].aFile == NULL)
+#define FileIsNotOpen(file) (VfdCache[file].fd == VFD_CLOSED)
 
 #define FileUnknownPos INT64CONST(-1)
 
 /* these are the assigned bits in fdstate below: */
 #define FD_TEMPORARY		(1 << 0)	/* T = delete when closed */
 #define FD_CLOSE_AT_EOXACT	(1 << 1)	/* T = close at eoXact */
-
-typedef struct alluxioFile
-{
-	ListCell *blockiter; /* iterator for alluxio file blocks */
-	List *blocksinfo;
-} alluxioFile;
 
 typedef struct vfd
 {
@@ -171,17 +162,7 @@ typedef struct vfd
 	/* NB: fileName is malloc'd, and must be free'd when closing the VFD */
 	int			fileFlags;		/* open(2) flags for (re)opening the file */
 	int			fileMode;		/* mode to pass to open(2) */
-	alluxioFile* aFile;
 } Vfd;
-
-typedef struct alluxioblock
-{
-    int		order;
-    char 	*name; /* block name */
-    size_t	length; /* block length, does not be assigned when do writing process */
-    bool 	writable; /* redundant tag,for convenience mark block */
-    int		streammingid; /* alluxio assiged id for r/w streaming , only work after create/open file ,default value is 0 */
-}alluxioBlock;
 
 /*
  * Virtual File Descriptor array pointer and size.	This grows as
@@ -242,13 +223,6 @@ static Oid *tempTableSpaces = NULL;
 static int	numTempTableSpaces = -1;
 static int	nextTempTableSpace = 0;
 
-void AlluxioFileClose(File file);
-int AlluxioFileSync(File file);
-File AlluxioPathNameOpenFile(FileName fileName, int fileFlags, int fileMode);
-int64 AlluxioFileTell(File file);
-int64 AlluxioFileSeek(File file, int64 offset, int whence);
-int AlluxioFileWrite(File file, const char *buffer, int amount);
-int AlluxioFileRead(File file, char *buffer, int amount) ;
 
 /*--------------------
  *
@@ -873,138 +847,6 @@ FileInvalidate(File file)
 }
 #endif
 
-inline static
-size_t alluxio_parsefile_callback(void *contents, size_t size, size_t nmemb, void *userp) {
-	char* ret = (char *)contents;
-	Vfd* Pfd = (Vfd*)userp;
-	List **blocklst = &(Pfd->aFile->blocksinfo);
-	int dirlenght = strlen(Pfd->fileName);
-
-	memcpy(alluxioCache.end,ret,size * nmemb);
-	alluxioCache.end += size *nmemb;
-	*(alluxioCache.end ) = '\0';
-
-	json_object *jobj = json_tokener_parse(alluxioCache.buffer);
-
-	if(json_type_array == json_object_get_type(jobj))
-	{
-		int length = json_object_array_length(jobj);
-		alluxioBlock **ab_array = palloc0(sizeof(alluxioBlock *) * length);
-
-		for(int i = 0 ;i < length; i ++)
-		{
-			json_object *blocksz,*blockname;
-			json_object *block = json_object_array_get_idx(jobj,i);
-
-			alluxioBlock* ab = palloc0(sizeof(alluxioBlock));
-
-			json_object_object_get_ex(block,"length",&blocksz);
-			json_object_object_get_ex(block,"name",&blockname);
-
-			ab->length = json_object_get_int(blocksz);
-			const char* name = json_object_get_string(blockname);
-			ab->name = palloc0(dirlenght + strlen(name) + 2);
-			sprintf(ab->name,"%s/%s",Pfd->fileName,name);
-			ab->order = atoi(name);
-
-			ab_array[ab->order - 1] = ab;
-		}
-
-		for (int i = 0; i < length; i++)
-			*blocklst = lappend(*blocklst, ab_array[i]);
-
-		pfree(ab_array);
-	}
-
-	json_object_put(jobj);
-
-	return size * nmemb;
-}
-
-inline static
-size_t alluxio_filelength(void *contents, size_t size, size_t nmemb, void *userp) {
-	int64* length = (int64 *)userp;
-
-	memcpy(alluxioCache.end,contents,size * nmemb);
-	alluxioCache.end += size *nmemb;
-	*(alluxioCache.end ) = '\0';
-
-	json_object *jobj = json_tokener_parse(alluxioCache.buffer);
-
-	if(json_type_array == json_object_get_type(jobj))
-	{
-		int num = json_object_array_length(jobj);
-		for(int i = 0 ;i < num; i ++)
-		{
-			json_object *block,*blocksz;
-
-			block = json_object_array_get_idx(jobj,i);
-			json_object_object_get_ex(block,"length",&blocksz);
-
-			*length += json_object_get_int(blocksz);
-		}
-	}
-	json_object_put(jobj);
-
-	return size * nmemb;
-}
-
-
-File
-AlluxioPathNameOpenFile(FileName fileName, int fileFlags, int fileMode)
-{
-	File file;
-	Vfd *vfdP;
-	MemoryContext oldCtx;
-
-	if(fileFlags & O_CREAT)
-	{
-		if(!alluxioPathExist(fileName))
-			alluxioMakeDirectory(fileName,NULL);
-	}
-	else
-	{
-		if(!alluxioPathExist(fileName))
-		{
-			DO_DB(elog(ERROR,"Alluxio open file :%s does not exist",fileName));
-			return -1;
-		}
-	}
-
-	oldCtx = MemoryContextSwitchTo(TopMemoryContext);
-	file = AllocateVfd();
-
-	vfdP = &VfdCache[file];
-	vfdP->fileName = strdup(fileName);
-	vfdP->fileFlags = fileFlags;
-	vfdP->fileMode = fileMode;
-	vfdP->seekPos = INT64CONST(0);
-	vfdP->aFile = palloc0(sizeof(alluxioFile));
-
-
-	RESET_ALLUXIOBUFFER();
-	//list all blocks info
-	alluxioListStatus(fileName,alluxio_parsefile_callback,vfdP);
-	RESET_ALLUXIOBUFFER();
-
-
-	if(fileFlags & O_APPEND)
-	{
-		RESET_ALLUXIOBUFFER();
-		alluxioListStatus(fileName,alluxio_filelength,&(vfdP->seekPos));
-		RESET_ALLUXIOBUFFER();
-	}
-
-	++nfile;
-	Insert(file);
-
-	MemoryContextSwitchTo(oldCtx);
-
-	DO_DB(elog(LOG, "AlluxioPathNameOpenFile: file: %d, success %s", file, fileName));
-
-	return file;
-}
-
 /*
  * open a file in an arbitrary directory
  *
@@ -1031,12 +873,8 @@ PathNameOpenFile(FileName fileName, int fileFlags, int fileMode)
 				(errcode(ERRCODE_OUT_OF_MEMORY),
 				 errmsg("out of memory")));
 
-	if(strstr(fileName,"://"))
-		return AlluxioPathNameOpenFile(fileName,fileFlags,fileMode);
-
 	file = AllocateVfd();
 	vfdP = &VfdCache[file];
-	vfdP->aFile = NULL;
 
 	while (nfile + numAllocatedDescs >= max_safe_fds)
 	{
@@ -1249,40 +1087,6 @@ OpenNamedFile(const char   *fileName,
 	return file;
 }
 
-void AlluxioFileClose(File file){
-	/*
-     * 如果isWriteable == true,关闭 index
-     * 释放资源
-     *
-     * vfs释放详见HdfsFileClose
-     */
-	Vfd *vfdP;
-
-	vfdP = &VfdCache[file];
-
-	DO_DB(elog(LOG, "AlluxioFileClose: %d (%s)", file, vfdP->fileName));
-
-	if (!FileIsNotOpen(file)) //file is open
-	{
-		Delete(file);
-
-		if(vfdP->aFile->blockiter && ((alluxioBlock *)lfirst(vfdP->aFile->blockiter))->streammingid)
-			alluxioClose(((alluxioBlock *)lfirst(vfdP->aFile->blockiter))->streammingid);
-
-		--nfile;
-		vfdP->fd = VFD_CLOSED;
-
-		ListCell *lc = NULL;
-		foreach(lc,vfdP->aFile->blocksinfo)
-		{
-			pfree(((alluxioBlock *)lfirst(lc))->name);
-			pfree((alluxioBlock *)lfirst(lc));
-		}
-		list_free(vfdP->aFile->blocksinfo);
-	}
-
-}
-
 /*
  * close a file when done with it
  */
@@ -1297,21 +1101,6 @@ FileClose(File file)
 			   file, VfdCache[file].fileName));
 
 	vfdP = &VfdCache[file];
-
-	if(vfdP->aFile)
-	{
-		AlluxioFileClose(file);
-
-		if (vfdP->fdstate & FD_TEMPORARY)
-		{
-			vfdP->fdstate &= ~FD_TEMPORARY;
-			alluxioDelete(VfdCache[file].fileName,true);
-		}
-
-		FreeVfd(file);
-
-		return ;
-	}
 
 	if (!FileIsNotOpen(file))
 	{
@@ -1387,62 +1176,6 @@ FileClose(File file)
 	FreeVfd(file);
 }
 
-/*
- * AlluxioFileRead
- *
- *  1. check if cache
- *  2. if file size less than buffer amount, copy to buffer directly
- *  3. else cache it first, and wait next loop read
- */
-int AlluxioFileRead(File file, char *buffer, int amount) {
-    int readLength;
-    int ret;
-
-    Assert(FileIsValid(file));
-    Vfd *vfdP;
-    vfdP = &VfdCache[file];
-
-    ret = FileAccess(file);
-    if(ret < 0)
-        return ret;
-
-    ret = 0;
-    readLength = 0;
-    char* ptr = buffer;
-    int remainToRead = amount;
-
-    ret = alluxioCacheRead(0,ptr,remainToRead);
-    remainToRead -= ret;
-    ptr += ret;
-    readLength +=ret;
-
-    while (vfdP->aFile->blockiter && remainToRead)
-    {
-        ((alluxioBlock *)lfirst(vfdP->aFile->blockiter))->streammingid = alluxioOpenFile(((alluxioBlock *)lfirst(vfdP->aFile->blockiter))->name);
-        size_t sz = ((alluxioBlock*)lfirst(vfdP->aFile->blockiter))->length;
-
-        if(sz <= remainToRead)
-            ret = alluxioRead(((alluxioBlock *)lfirst(vfdP->aFile->blockiter))->streammingid, ptr , remainToRead);
-        else
-            ret = alluxioCacheRead(((alluxioBlock *)lfirst(vfdP->aFile->blockiter))->streammingid, ptr , remainToRead);
-
-        remainToRead -= ret;
-        ptr += ret;
-        readLength += ret;
-
-        alluxioClose(((alluxioBlock *)lfirst(vfdP->aFile->blockiter))->streammingid);
-        ((alluxioBlock *)lfirst(vfdP->aFile->blockiter))->streammingid = 0;
-        vfdP->aFile->blockiter = lnext(vfdP->aFile->blockiter);
-    }
-
-    if( readLength >= 0)
-        VfdCache[file].seekPos += readLength;
-    else
-        VfdCache[file].seekPos = FileUnknownPos;
-
-    return readLength;
-}
-
 int
 FileRead(File file, char *buffer, int amount)
 {
@@ -1462,9 +1195,6 @@ FileRead(File file, char *buffer, int amount)
 	returnCode = FileAccess(file);
 	if (returnCode < 0)
 		return returnCode;
-
-	if(VfdCache[file].aFile)
-		return AlluxioFileRead(file,buffer,amount);
 
 retry:
 	returnCode = read(VfdCache[file].fd, buffer, amount);
@@ -1505,71 +1235,6 @@ retry:
 	return returnCode;
 }
 
-int AlluxioFileWrite(File file, const char *buffer, int amount)
-{
-	int returnCode;
-	Vfd *vfdP;
-	alluxioFile* aFile;
-	vfdP = &VfdCache[file];
-	MemoryContext oldCtx;
-
-	Assert(FileIsValid(file));
-
-	DO_DB(elog(LOG, "AlluxioFileWrite: %d (%s) " INT64_FORMAT " %d %p",
-			file,vfdP->fileName,
-			vfdP->seekPos, amount, buffer));
-
-	returnCode = FileAccess(file);
-	if (returnCode < 0)
-		return returnCode;
-
-	DO_DB(elog(LOG, "AlluxioFileWrite: file %d filename (%s)  amount%d buffer%p", file,
-			   vfdP->fileName, amount, buffer));
-
-	aFile = vfdP->aFile;
-	oldCtx = MemoryContextSwitchTo(TopMemoryContext);
-
-	if(aFile->blockiter &&
-			(((alluxioBlock*)lfirst(aFile->blockiter))->length + amount > ALLUXIO_CACHE_SZ)
-			)
-	{
-		AlluxioFileSync(file);
-	}
-
-	if(!aFile->blockiter || !((alluxioBlock*)lfirst(aFile->blockiter))->writable )
-	{
-		int it_id = list_length(aFile->blocksinfo) + 1;
-		alluxioBlock *p_block = palloc0(sizeof(alluxioBlock));
-
-		p_block->name = palloc0(strlen(vfdP->fileName) + 16);
-		sprintf(p_block->name,"%s/%d",vfdP->fileName,it_id);
-		p_block->streammingid = alluxioCreateFile(p_block->name);
-		p_block->writable = true;
-		p_block->length = 0;
-
-		aFile->blocksinfo = lappend(aFile->blocksinfo,p_block);
-		aFile->blockiter = aFile->blocksinfo->tail;
-
-	}
-	returnCode = alluxioWrite(((alluxioBlock *)lfirst(aFile->blockiter))->streammingid,buffer,amount);
-
-	if (returnCode >= 0)
-	{
-		((alluxioBlock *)lfirst(aFile->blockiter))->length +=returnCode;
-		vfdP->seekPos += returnCode;
-	}
-	else
-	{
-		/* Trouble, so assume we don't know the file position anymore */
-		((alluxioBlock *)lfirst(aFile->blockiter))->length = FileUnknownPos;
-		vfdP->seekPos = FileUnknownPos;
-	}
-
-	MemoryContextSwitchTo(oldCtx);
-
-	return returnCode;
-}
-
 int
 FileWrite(File file, char *buffer, int amount)
 {
@@ -1584,9 +1249,6 @@ FileWrite(File file, char *buffer, int amount)
 	returnCode = FileAccess(file);
 	if (returnCode < 0)
 		return returnCode;
-
-	if(VfdCache[file].aFile)
-		return AlluxioFileWrite(file,buffer,amount);
 
 #ifdef FAULT_INJECTOR
 	if (! strcmp(VfdCache[file].fileName, "global/pg_control"))
@@ -1653,34 +1315,6 @@ retry:
 
 	return returnCode;
 }
-int AlluxioFileSync(File file){
-	/*
-     * close file,isWritable = false
-     */
-	int returnCode;
-	Vfd *vfdP;
-	vfdP = &VfdCache[file];
-
-	Assert(FileIsValid(file));
-
-	DO_DB(elog(LOG, "AlluxioFileSync: %d (%s) " INT64_FORMAT ,
-			file,vfdP->fileName,
-			vfdP->seekPos ));
-
-	returnCode = FileAccess(file);
-	if (returnCode < 0)
-		return returnCode;
-
-	if(vfdP->aFile->blockiter
-			&& ((alluxioBlock *)lfirst(vfdP->aFile->blockiter))->streammingid)
-	{
-		returnCode = alluxioClose(((alluxioBlock *)lfirst(vfdP->aFile->blockiter))->streammingid);
-		((alluxioBlock *)lfirst(vfdP->aFile->blockiter))->streammingid = 0;
-		((alluxioBlock *)lfirst(vfdP->aFile->blockiter))->writable = false;
-	}
-
-	return returnCode;
-}
 
 int
 FileSync(File file)
@@ -1696,77 +1330,10 @@ FileSync(File file)
 		return returnCode;
 
 	SIMPLE_FAULT_INJECTOR(FileRepFlush);
-	if (VfdCache[file].aFile)
-		returnCode =  AlluxioFileSync(file);
-	else
-		returnCode =  pg_fsync(VfdCache[file].fd);
+
+	returnCode =  pg_fsync(VfdCache[file].fd);
 
 	return returnCode;
-}
-
-
-int64
-AlluxioFileSeek(File file, int64 offset, int whence) {
-    /*
-     * TODO: plan an advanced design
-     * send list-status and accumulation
-     */
-    if (whence == SEEK_CUR) {
-        ereport(WARNING,
-                (errcode(ERRCODE_IO_ERROR),
-                        errmsg("AlluxioFileSeek does not support SEEK_CUR yet.")));
-        errno = EINVAL;
-        return -1;
-    }
-    Assert(FileIsValid(file));
-    Vfd *vfdP = &VfdCache[file];
-
-    ListCell *cell = NULL;
-    int64 desiredPos = 0;
-    switch (whence) {
-        case SEEK_SET:
-            desiredPos = offset;
-            int64 current = 0;
-            cell = list_head(vfdP->aFile->blocksinfo);
-            do {
-                if (current >= desiredPos)
-                    break;
-
-                alluxioBlock *block = (alluxioBlock *) lfirst(cell);
-                current += block->length;
-
-                cell = lnext(cell);
-            } while (cell);
-            if (current == desiredPos) {
-                vfdP->aFile->blockiter = cell;
-            } else {
-                ereport(WARNING,
-                        (errcode(ERRCODE_IO_ERROR),
-                                errmsg("Illegal seek in AlluxioFileSeek: desiredPos = %ld,current = %ld.", desiredPos,
-                                       current)));
-                errno = EINVAL;
-                return -1;
-            }
-            break;
-        case SEEK_END:
-            foreach(cell, vfdP->aFile->blocksinfo);
-            {
-                if (cell) {
-                    alluxioBlock *block = (alluxioBlock *) lfirst(cell);
-                    desiredPos += block->length;
-                    desiredPos += offset;
-                } else {
-                    desiredPos = 0;
-                }
-            }
-            vfdP->aFile->blockiter = NULL;
-            break;
-        default:
-            Assert(!"invalid whence");
-            break;
-    }
-    vfdP->seekPos = desiredPos;
-    return vfdP->seekPos;
 }
 
 int64
@@ -1779,9 +1346,6 @@ FileSeek(File file, int64 offset, int whence)
 	DO_DB(elog(LOG, "FileSeek: %d (%s) " INT64_FORMAT " " INT64_FORMAT " %d",
 			   file, VfdCache[file].fileName,
 			   VfdCache[file].seekPos, offset, whence));
-
-	if(VfdCache[file].aFile)
-		return AlluxioFileSeek(file,offset,whence);
 
 	if (FileIsNotOpen(file))
 	{
@@ -1857,13 +1421,6 @@ FileDiskSize(File file)
 	return (int64) buf.st_size;
 }
 
-int64 AlluxioFileTell(File file)
-{
-	Vfd *vfdP;
-	vfdP = &VfdCache[file];
-	return vfdP->seekPos;
-}
-
 int64
 FileNonVirtualCurSeek(File file)
 {
@@ -1878,10 +1435,6 @@ FileNonVirtualCurSeek(File file)
 	returnCode = FileAccess(file);
 	if (returnCode < 0)
 		return returnCode;
-
-	if(VfdCache[file].aFile)
-		return AlluxioFileTell(file);
-
 
 	return pg_lseek64(VfdCache[file].fd, 0, SEEK_CUR);
 }
