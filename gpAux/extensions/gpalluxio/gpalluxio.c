@@ -29,11 +29,20 @@ Datum alluxio_export(PG_FUNCTION_ARGS) {
     if (!CALLED_AS_EXTPROTOCOL(fcinfo))
         elog(ERROR, "extprotocol_import: not called by external protocol manager");
 
+    extern struct _alluxioCache alluxioCache;
     /* Get our internal description of the protocol */
     alluxioHandler *resHandle = (alluxioHandler *)EXTPROTOCOL_GET_USER_CTX(fcinfo);
 
     /* last call. destroy writer */
     if (EXTPROTOCOL_IS_LAST_CALL(fcinfo)) {
+
+        if(alluxioCache.end - alluxioCache.begin > 0)
+        {
+            AlluxioWrite(resHandle,alluxioCache.begin,alluxioCache.end - alluxioCache.begin);
+
+            bzero(alluxioCache.buffer,alluxioCache.sz);
+            alluxioCache.end = alluxioCache.begin;
+        }
 
         AlluxioDisconnectDir(resHandle);
         destoryGpalluxioHandler(resHandle);
@@ -64,7 +73,16 @@ Datum alluxio_export(PG_FUNCTION_ARGS) {
     int32 data_len = EXTPROTOCOL_GET_DATALEN(fcinfo);
 
 
-    AlluxioWrite(resHandle,data_buf,data_len);
+    if(alluxioCache.end - alluxioCache.begin + data_len > alluxioCache.sz)
+    {
+        AlluxioWrite(resHandle,alluxioCache.begin,alluxioCache.end - alluxioCache.begin);
+
+        bzero(alluxioCache.buffer,alluxioCache.sz);
+        alluxioCache.end = alluxioCache.begin;
+    }
+
+    memcpy(alluxioCache.end,data_buf,data_len);
+    alluxioCache.end += data_len;
 
     PG_RETURN_INT32(data_len);
 }
