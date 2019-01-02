@@ -1,5 +1,3 @@
-#include "storage/alluxiofs.h"
-
 #include <string.h>
 #include "postgres.h"
 
@@ -15,7 +13,7 @@
 #include "miscadmin.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
-#include "storage/alluxiofs.h"
+#include "alluxiofs.h"
 #include "libpq/auth.h"
 #include "libpq/pqformat.h"
 #include "utils/workfile_mgr.h"
@@ -33,7 +31,7 @@
 
 static CURL *curl = 0;
 static char alluxio_buffer[ALLUXIO_BUFFER_SZ];
-extern char* alluxio_url;
+char* alluxio_url = "localhost:39999/api/v1/paths//gpdb";
 size_t alluxio_blocksize = 0;
 struct _alluxioCache alluxioCache = {NULL,0,NULL,NULL};
 
