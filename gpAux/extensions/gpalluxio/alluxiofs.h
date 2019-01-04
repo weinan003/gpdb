@@ -39,5 +39,5 @@ extern int alluxioClose(int streammingid);
 extern int alluxioDelete(char* fileName,bool recursive);
 
 #define RESET_ALLUXIOBUFFER() do{ alluxioCache.begin = alluxioCache.end = alluxioCache.buffer; } while(0)
-#define ALLUXIO_CACHE_SZ 64 * 1024 * 1024
+#define ALLUXIO_CACHE_SZ 256 * 1024 * 1024
 #endif
