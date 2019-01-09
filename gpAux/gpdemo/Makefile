@@ -17,17 +17,11 @@ export enable_gpfdist
 export with_openssl
 
 MASTER_PORT ?= 15432
-STANDBY_PORT ?= 16432
 PORT_BASE ?= 25432
-NUM_PRIMARY_MIRROR_PAIRS ?= 3
+NUM_PRIMARY_MIRROR_PAIRS ?= 1
 
-ifeq ($(WITH_MIRRORS), )
-WITH_MIRRORS = true
-endif
-
-ifeq ($(WITH_MIRRORS), true)
-WITH_STANDBY = true
-endif
+WITH_STANDBY = false
+WITH_MIRRORS = false
 
 export MASTER_DEMO_PORT=$(MASTER_PORT)
 export STANDBY_DEMO_PORT=$(STANDBY_PORT)

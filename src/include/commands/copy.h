@@ -148,6 +148,7 @@ typedef struct CopyStateData
 	bool		custom;			/* custom format? */
 	bool		oids;			/* include OIDs? */
 	bool        binary;         /* binary format */
+	bool		tuple_mode;
 	bool		csv_mode;		/* Comma Separated Value format? */
 	bool		header_line;	/* CSV header line? */
 	char	   *null_print;		/* NULL marker string (server encoding!) */

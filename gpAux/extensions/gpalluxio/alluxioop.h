@@ -3,6 +3,7 @@
 
 #include "postgres.h"
 #include "utils/resowner.h"
+#include "alluxiofs.h"
 
 typedef struct alluxioHandler {
     ResourceOwner owner; /* owner of this handle */
@@ -25,6 +26,8 @@ void abortGpalluxioCallback(ResourceReleasePhase phase,bool isCommit,bool isTopl
 void AlluxioConnectDir(alluxioHandler *handler);
 
 void AlluxioDisconnectDir(alluxioHandler *handler);
+
+struct _alluxioCache* AlluxioDirectRead(alluxioHandler *handler);
 
 int32 AlluxioRead(alluxioHandler *handler,char *buffer,int32 length);
 

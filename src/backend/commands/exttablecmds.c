@@ -737,12 +737,14 @@ transformFormatType(char *formatname)
 		result = 'a';
 	else if (pg_strcasecmp(formatname, "parquet") == 0)
 		result = 'p';
+	else if (pg_strcasecmp(formatname, "tuple") == 0)
+		result = 'T';
 	else
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
 				 errmsg("unsupported format '%s'", formatname),
 			   errhint("Available formats for external tables are \"text\", "
-					   "\"csv\", \"avro\", \"parquet\" and \"custom\"")));
+					   "\"csv\", \"avro\", \"parquet\", \"AO\" and \"custom\"")));
 
 	return result;
 }
@@ -809,10 +811,11 @@ transformFormatOpts(char formattype, List *formatOpts, int numcols, bool iswrita
 		   fmttype_is_text(formattype) ||
 		   fmttype_is_csv(formattype) ||
 		   fmttype_is_avro(formattype) ||
+		   fmttype_is_tuple(formattype) ||
 		   fmttype_is_parquet(formattype));
 
 	/* Extract options from the statement node tree */
-	if (fmttype_is_text(formattype) || fmttype_is_csv(formattype))
+	if (fmttype_is_text(formattype) || fmttype_is_csv(formattype) || fmttype_is_tuple(formattype))
 	{
 		foreach(option, formatOpts)
 		{
@@ -989,7 +992,7 @@ transformFormatOpts(char formattype, List *formatOpts, int numcols, bool iswrita
 		 * build the format option string that will get stored in the catalog.
 		 */
 		/* +1 leaves room for sprintf's trailing null */
-		if (fmttype_is_text(formattype))
+		if (fmttype_is_text(formattype) || fmttype_is_tuple(formattype))
 		{
 			format_str = psprintf("delimiter '%s' null '%s' escape '%s'%s%s%s",
 					delim, null_print, escape, (header_line ? " header" : ""),
