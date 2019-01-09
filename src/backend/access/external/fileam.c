@@ -606,58 +606,76 @@ external_insert(ExternalInsertDesc extInsertDesc, HeapTuple instup)
 	/*
 	 * deconstruct the tuple and format it into text
 	 */
-	if (!customFormat)
+	if(extInsertDesc->ext_pstate->tuple_mode)
 	{
-		/* TEXT or CSV */
-		heap_deform_tuple(instup, tupDesc, values, nulls);
-		CopyOneRowTo(pstate, HeapTupleGetOid(instup), values, nulls);
-		CopySendEndOfRow(pstate);
+		MemoryContext oldcontext;
+		MemoryContextReset(pstate->rowcontext);
+		oldcontext = MemoryContextSwitchTo(pstate->rowcontext);
+		appendBinaryStringInfo(pstate->fe_msgbuf, (char *) instup, memtuple_get_size((MemTuple)instup));
+	    MemoryContextSwitchTo(oldcontext);
+
+		external_senddata(extInsertDesc->ext_file, pstate);
+        /* Reset our buffer to start clean next round */
+        pstate->fe_msgbuf->len = 0;
+        pstate->fe_msgbuf->data[0] = '\0';
+        pstate->processed++;
+
+        return 0;
 	}
 	else
 	{
-		/* custom format. convert tuple using user formatter */
-		Datum		d;
-		bytea	   *b;
-		FunctionCallInfoData fcinfo;
+		if (!customFormat)
+		{
+			/* TEXT or CSV */
+			heap_deform_tuple(instup, tupDesc, values, nulls);
+			CopyOneRowTo(pstate, HeapTupleGetOid(instup), values, nulls);
+			CopySendEndOfRow(pstate);
+		}
+		else
+		{
+			/* custom format. convert tuple using user formatter */
+			Datum		d;
+			bytea	   *b;
+			FunctionCallInfoData fcinfo;
 
-		/*
-		 * There is some redundancy between FormatterData and
-		 * ExternalInsertDesc we may be able to consolidate data structures a
-		 * little.
-		 */
-		FormatterData *formatter = extInsertDesc->ext_formatter_data;
+			/*
+             * There is some redundancy between FormatterData and
+             * ExternalInsertDesc we may be able to consolidate data structures a
+             * little.
+             */
+			FormatterData *formatter = extInsertDesc->ext_formatter_data;
 
-		/* must have been created during insert_init */
-		Assert(formatter);
+			/* must have been created during insert_init */
+			Assert(formatter);
 
-		/* per call formatter prep */
-		FunctionCallPrepareFormatter(&fcinfo,
-									 1,
-									 pstate,
-									 formatter,
-									 extInsertDesc->ext_rel,
-									 extInsertDesc->ext_tupDesc,
-									 pstate->out_functions,
-									 NULL);
+			/* per call formatter prep */
+			FunctionCallPrepareFormatter(&fcinfo,
+										 1,
+										 pstate,
+										 formatter,
+										 extInsertDesc->ext_rel,
+										 extInsertDesc->ext_tupDesc,
+										 pstate->out_functions,
+										 NULL);
 
-		/* Mark the correct record type in the passed tuple */
-		HeapTupleHeaderSetDatumLength(instup->t_data, instup->t_len);
-		HeapTupleHeaderSetTypeId(instup->t_data, tupDesc->tdtypeid);
-		HeapTupleHeaderSetTypMod(instup->t_data, tupDesc->tdtypmod);
+			/* Mark the correct record type in the passed tuple */
+			HeapTupleHeaderSetTypeId(instup->t_data, tupDesc->tdtypeid);
+			HeapTupleHeaderSetTypMod(instup->t_data, tupDesc->tdtypmod);
 
-		fcinfo.arg[0] = HeapTupleGetDatum(instup);
-		fcinfo.argnull[0] = false;
+			fcinfo.arg[0] = HeapTupleGetDatum(instup);
+			fcinfo.argnull[0] = false;
 
-		d = FunctionCallInvoke(&fcinfo);
-		MemoryContextReset(formatter->fmt_perrow_ctx);
+			d = FunctionCallInvoke(&fcinfo);
+			MemoryContextReset(formatter->fmt_perrow_ctx);
 
-		/* We do not expect a null result */
-		if (fcinfo.isnull)
-			elog(ERROR, "function %u returned NULL", fcinfo.flinfo->fn_oid);
+			/* We do not expect a null result */
+			if (fcinfo.isnull)
+				elog(ERROR, "function %u returned NULL", fcinfo.flinfo->fn_oid);
 
-		b = DatumGetByteaP(d);
+			b = DatumGetByteaP(d);
 
-		CopyOneCustomRowTo(pstate, b);
+			CopyOneCustomRowTo(pstate, b);
+		}
 	}
 
 	/* Write the data into the external source */
@@ -895,6 +913,38 @@ parse_next_line(FileScanDesc scan)
 	}
 
 	return ret_mode;
+}
+static MemTuple
+externalgettup_tuple(FileScanDesc scan)
+{
+	MemTuple tuple = NULL;
+	CopyState	pstate = scan->fs_pstate;
+	static char* blockcache;
+	static int32 bc_offset;
+
+	if(pstate->raw_buf_done)
+	{
+	    bc_offset = 0;
+		pstate->bytesread = url_fread(&blockcache, -1, scan->fs_file, pstate);
+
+		if(pstate->bytesread == 0)
+		{
+			pstate->fe_eof = true;
+			scan->fs_inited = false;
+			return NULL;
+		}
+
+		pstate->raw_buf_done = false;
+	}
+
+	tuple = (MemTuple)(blockcache + bc_offset);
+	int32 sz = memtuple_get_size((MemTuple)(blockcache + bc_offset));
+	bc_offset += sz;
+
+	if(bc_offset == pstate->bytesread)
+	    pstate->raw_buf_done = true;
+
+	return tuple;
 }
 
 static HeapTuple
@@ -1176,6 +1226,7 @@ externalgettup(FileScanDesc scan,
 {
 	CopyState	pstate = scan->fs_pstate;
 	bool		custom = pstate->custom;
+	bool 		istuple = pstate->tuple_mode;
 	HeapTuple	tup = NULL;
 	ErrorContextCallback externalscan_error_context;
 
@@ -1198,7 +1249,9 @@ externalgettup(FileScanDesc scan,
 		/* (set current state...) */
 	}
 
-	if (!custom)
+	if(istuple)
+		tup = externalgettup_tuple(scan); /* tuple */
+	else if (!custom)
 		tup = externalgettup_defined(scan); /* text/csv */
 	else
 		tup = externalgettup_custom(scan);  /* custom */
@@ -1302,6 +1355,7 @@ InitParseState(CopyState pstate, Relation relation,
 	pstate->filename = uri;
 	pstate->copy_dest = COPY_EXTERNAL_SOURCE;
 	pstate->missing_bytes = 0;
+    pstate->tuple_mode = fmttype_is_tuple(fmtType);
 	pstate->csv_mode = fmttype_is_csv(fmtType);
 	pstate->custom = fmttype_is_custom(fmtType);
 	pstate->custom_formatter_func = NULL;

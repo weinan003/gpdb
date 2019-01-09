@@ -2,6 +2,7 @@
 #include "alluxiofs.h"
 #include <json-c/json.h>
 #include <curl/curl.h>
+#include <sys/time.h>
 
 static alluxioHandler *currHandler = NULL;
 extern struct _alluxioCache alluxioCache;
@@ -143,6 +144,22 @@ void AlluxioDisconnectDir(alluxioHandler *handler)
     list_free(handler->blocksinfo);
 
     handler->url = NULL;
+}
+
+struct _alluxioCache* AlluxioDirectRead(alluxioHandler *handler)
+{
+    struct _alluxioCache *cache = NULL;
+    int streammingid;
+    if(handler->blockiter) {
+        streammingid = alluxioOpenFile(((alluxioBlock *)lfirst(handler->blockiter))->name);
+
+        cache = alluxioDirectRead(streammingid);
+        alluxioClose(streammingid);
+        handler->blockiter = lnext(handler->blockiter);
+
+    }
+
+    return cache;
 }
 
 int32 AlluxioRead(alluxioHandler *handler,char *buffer,int32 length)

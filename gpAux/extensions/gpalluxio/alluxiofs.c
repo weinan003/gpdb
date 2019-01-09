@@ -254,10 +254,12 @@ int alluxioCacheRead(int streammingid,char *buffer,int amount)
     //如果有id,读取data到cache中
     if(streammingid)
     {
+        struct timeval begin_tvl,end_tvl;
         struct curl_slist *headers = NULL;
         curl = curl_easy_init();
         if(curl)
         {
+            gettimeofday(&begin_tvl,NULL);
             bzero(alluxio_buffer,ALLUXIO_BUFFER_SZ);
 
             strcpy(alluxio_buffer,alluxio_url);
@@ -282,6 +284,10 @@ int alluxioCacheRead(int streammingid,char *buffer,int amount)
 
             curl_slist_free_all(headers);
             curl_easy_cleanup(curl);
+
+            gettimeofday(&end_tvl,NULL);
+            double  used = 1000 *(end_tvl.tv_sec - begin_tvl.tv_sec) + (end_tvl.tv_usec - begin_tvl.tv_usec) /1000;
+            elog(LOG,"ALLUXIO CACHEREAD TIME :%lf",used);
         }
     }
 
@@ -297,6 +303,49 @@ int alluxioCacheRead(int streammingid,char *buffer,int amount)
     }
 
     return retCode;
+}
+
+struct _alluxioCache *alluxioDirectRead(int streammingid)
+{
+    if(streammingid)
+    {
+        struct timeval begin_tvl,end_tvl;
+        struct curl_slist *headers = NULL;
+        curl = curl_easy_init();
+        if(curl)
+        {
+            gettimeofday(&begin_tvl,NULL);
+            bzero(alluxio_buffer,ALLUXIO_BUFFER_SZ);
+
+            strcpy(alluxio_buffer,alluxio_url);
+            sprintf(alluxio_buffer,"http://%s",alluxio_url);
+            char *pstr = strstr(alluxio_buffer,"/v1") + 3;
+            int offset = sprintf(pstr,"/streams/%d/read?", streammingid);
+            *(pstr + offset) = '\0';
+
+            curl_easy_setopt(curl,CURLOPT_URL,alluxio_buffer);
+
+            headers = curl_slist_append(headers, "Content-Type: application/json");
+            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+            curl_easy_setopt(curl,CURLOPT_POSTFIELDS,"{}");
+            curl_easy_setopt(curl,CURLOPT_POSTFIELDSIZE,-1L);
+
+            RESET_ALLUXIOBUFFER();
+
+            curl_easy_setopt(curl,CURLOPT_WRITEFUNCTION,cacheread_callback);
+            curl_easy_setopt(curl,CURLOPT_WRITEDATA,NULL);
+
+            curl_easy_perform(curl);
+
+            curl_slist_free_all(headers);
+            curl_easy_cleanup(curl);
+
+            gettimeofday(&end_tvl,NULL);
+            double  used = 1000 *(end_tvl.tv_sec - begin_tvl.tv_sec) + (end_tvl.tv_usec - begin_tvl.tv_usec) /1000;
+            elog(LOG,"ALLUXIO CACHEREAD TIME :%lf",used);
+        }
+    }
+    return &alluxioCache;
 }
 
 int alluxioRead(int streammingid,char *buffer,int amount)

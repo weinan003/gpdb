@@ -3266,7 +3266,21 @@ ExecInsert(TupleTableSlot *slot,
 		if (resultRelInfo->ri_extInsertDesc == NULL)
 			resultRelInfo->ri_extInsertDesc = external_insert_init(resultRelationDesc);
 
-		newId = external_insert(resultRelInfo->ri_extInsertDesc, tuple);
+
+		if(resultRelInfo->ri_extInsertDesc->ext_pstate->tuple_mode)
+		{
+			MemTuple tuple = ExecFetchSlotMemTuple(slot, false);
+			external_insert(resultRelInfo->ri_extInsertDesc, tuple);
+			newId =  MemTupleGetOid(tuple,slot->tts_mt_bind);
+
+		}
+		else
+		{
+			HeapTuple tuple = ExecFetchSlotHeapTuple(slot);
+			newId = external_insert(resultRelInfo->ri_extInsertDesc, tuple);
+		}
+
+		ItemPointerSetInvalid(&lastTid);
 	}
 	else
 	{
