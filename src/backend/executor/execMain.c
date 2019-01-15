@@ -3280,7 +3280,6 @@ ExecInsert(TupleTableSlot *slot,
 			newId = external_insert(resultRelInfo->ri_extInsertDesc, tuple);
 		}
 
-		ItemPointerSetInvalid(&lastTid);
 	}
 	else
 	{

@@ -139,21 +139,7 @@ ExternalNext(ExternalScanState *node)
 		 * that ExecStoreTuple will increment the refcount of the buffer; the
 		 * refcount will not be dropped until the tuple table slot is cleared.
 		 */
-		if(tuple && is_memtuple((GenericTuple)tuple))
-		{
-			ExecStoreMinimalTuple(tuple, slot, false);
-			Gpmon_Incr_Rows_Out(GpmonPktFromExtScanState(node));
-			CheckSendPlanStateGpmonPkt(&node->ss.ps);
-			/*
-             * CDB: Label each row with a synthetic ctid if needed for subquery dedup.
-             */
-			if (node->cdb_want_ctid &&
-					!TupIsNull(slot))
-			{
-				slot_set_ctid_from_fake(slot, &node->cdb_fake_ctid);
-			}
-		}
-		else if (tuple)
+		if (tuple)
 		{
 			ExecStoreGenericTuple(tuple, slot, true);
 			if (node->ess_ScanDesc->fs_hasConstraints && !ExternalConstraintCheck(slot, node))
