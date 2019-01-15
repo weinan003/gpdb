@@ -21,7 +21,10 @@ endif
 # targets built via top_builddir/GNUmakefile
 #
 
-all: mapreduce gpcloud pxf
+all: mapreduce gpcloud pxf gpalluxio
+
+gpalluxio:
+	$(MAKE) -C gpalluxio
 
 mapreduce:
 	@if [ "$(enable_mapreduce)" = "yes" ]; then \
