@@ -917,7 +917,8 @@ parse_next_line(FileScanDesc scan)
 static MemTuple
 externalgettup_tuple(FileScanDesc scan)
 {
-	MemTuple tuple = NULL;
+	MemTuple tuple_ptr = NULL;
+    MemTuple tuple = NULL;
 	CopyState	pstate = scan->fs_pstate;
 	static char* blockcache;
 	static int32 bc_offset;
@@ -937,9 +938,11 @@ externalgettup_tuple(FileScanDesc scan)
 		pstate->raw_buf_done = false;
 	}
 
-	tuple = (MemTuple)(blockcache + bc_offset);
+	tuple_ptr = (MemTuple)(blockcache + bc_offset);
 	int32 sz = memtuple_get_size((MemTuple)(blockcache + bc_offset));
 	bc_offset += sz;
+	tuple = (MemTuple)palloc0(sz);
+	memcpy(tuple,tuple_ptr,sz);
 
 	if(bc_offset == pstate->bytesread)
 	    pstate->raw_buf_done = true;
