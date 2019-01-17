@@ -3167,7 +3167,13 @@ ExecInsert(TupleTableSlot *slot,
 			 * Make a modifiable copy, since external_insert() takes the
 			 * liberty to modify the tuple.
 			 */
-			tuple = ExecCopySlotHeapTuple(partslot);
+			if (resultRelInfo->ri_extInsertDesc == NULL)
+				resultRelInfo->ri_extInsertDesc = external_insert_init(resultRelationDesc);
+
+			if(resultRelInfo->ri_extInsertDesc->ext_pstate->tuple_mode)
+				tuple = ExecFetchSlotMemTuple(partslot, false);
+			else
+				tuple = ExecCopySlotHeapTuple(partslot);
 		}
 	}
 	else
@@ -3262,24 +3268,20 @@ ExecInsert(TupleTableSlot *slot,
 	}
 	else if (rel_is_external)
 	{
-		/* Writable external table */
-		if (resultRelInfo->ri_extInsertDesc == NULL)
-			resultRelInfo->ri_extInsertDesc = external_insert_init(resultRelationDesc);
-
+        /* Writable external table */
+        if (resultRelInfo->ri_extInsertDesc == NULL)
+            resultRelInfo->ri_extInsertDesc = external_insert_init(resultRelationDesc);
 
 		if(resultRelInfo->ri_extInsertDesc->ext_pstate->tuple_mode)
 		{
-			MemTuple tuple = ExecFetchSlotMemTuple(slot, false);
 			external_insert(resultRelInfo->ri_extInsertDesc, tuple);
 			newId =  MemTupleGetOid(tuple,slot->tts_mt_bind);
-
 		}
 		else
 		{
-			HeapTuple tuple = ExecFetchSlotHeapTuple(slot);
+
 			newId = external_insert(resultRelInfo->ri_extInsertDesc, tuple);
 		}
-
 	}
 	else
 	{
