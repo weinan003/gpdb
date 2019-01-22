@@ -8,7 +8,6 @@
 #include <fcntl.h>
 
 #include "access/xact.h"
-#include "cdb/cdbfilerep.h"
 #include "cdb/cdbvars.h"
 #include "miscadmin.h"
 #include "storage/fd.h"

@@ -1,7 +1,9 @@
 SHLIB_LINK += $(COMMON_LINK_OPTIONS) -ljson-c -lcurl
-PG_CPPFLAGS += $(COMMON_CPP_FLAGS) -Iinclude -Ilib -I$(libpq_srcdir) -I$(libpq_srcdir)/postgresql/server/utils
+PG_CPPFLAGS += $(COMMON_CPP_FLAGS) -Iinclude -Ilib -I$(libpq_srcdir) -I$(libpq_srcdir)/postgresql/server/utils -I/usr/local/include
 
 PG_CPPFLAGS += -g
+
+LDLIBS += -ljson-c -lcurl
 
 # Targets
 MODULE_big = gpalluxio
