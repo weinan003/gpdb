@@ -124,11 +124,24 @@ Datum alluxio_import(PG_FUNCTION_ARGS)
         EXTPROTOCOL_SET_USER_CTX(fcinfo, resHandle);
     }
 
-    char *data_buf = EXTPROTOCOL_GET_DATABUF(fcinfo);
     int32 data_len = EXTPROTOCOL_GET_DATALEN(fcinfo);
 
-
-    data_len = AlluxioRead(resHandle,data_buf,data_len);
+    if(data_len == -1)
+    {
+        data_len = 0;
+        char **data_buf_ref = EXTPROTOCOL_GET_DATABUF(fcinfo);
+        struct _alluxioCache *pCache = AlluxioDirectRead(resHandle);
+        if(pCache)
+        {
+            *data_buf_ref = pCache->buffer;
+            data_len = pCache->end - pCache->buffer;
+        }
+    }
+    else
+    {
+        char *data_buf = EXTPROTOCOL_GET_DATABUF(fcinfo);
+        data_len = AlluxioRead(resHandle,data_buf,data_len);
+    }
 
     PG_RETURN_INT32(data_len);
 }

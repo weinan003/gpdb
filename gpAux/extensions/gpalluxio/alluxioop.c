@@ -233,3 +233,19 @@ void AlluxioFileSync(alluxioHandler *handler){
     }
 
 }
+
+struct _alluxioCache* AlluxioDirectRead(alluxioHandler *handler)
+{
+    struct _alluxioCache *cache = NULL;
+    int streammingid;
+    if(handler->blockiter) {
+        streammingid = alluxioOpenFile(((alluxioBlock *)lfirst(handler->blockiter))->name);
+
+        cache = alluxioDirectRead(streammingid);
+        alluxioClose(streammingid);
+        handler->blockiter = lnext(handler->blockiter);
+
+    }
+
+    return cache;
+}

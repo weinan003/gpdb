@@ -134,6 +134,7 @@ typedef struct CopyStateData
 	bool		oids;			/* include OIDs? */
 	bool		freeze;			/* freeze rows on loading? */
 	bool        binary;         /* binary format */
+	bool		tuple_mode;
 	bool		csv_mode;		/* Comma Separated Value format? */
 	bool		header_line;	/* CSV header line? */
 	char	   *null_print;		/* NULL marker string (server encoding!) */

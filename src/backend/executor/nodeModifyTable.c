@@ -478,20 +478,30 @@ ExecInsert(TupleTableSlot *parentslot,
 		{
 			/* Writable external table */
 			HeapTuple tuple;
+			MemTuple	mtuple;
 
 			if (resultRelInfo->ri_extInsertDesc == NULL)
 				resultRelInfo->ri_extInsertDesc = external_insert_init(resultRelationDesc);
 
-			/*
-			 * get the heap tuple out of the tuple table slot, making sure we have a
-			 * writable copy. (external_insert() can scribble on the tuple)
-			 */
-			tuple = ExecMaterializeSlot(slot);
-			if (resultRelationDesc->rd_rel->relhasoids)
-				HeapTupleSetOid(tuple, tuple_oid);
+			if(resultRelInfo->ri_extInsertDesc->ext_pstate->tuple_mode)
+			{
+				mtuple = ExecFetchSlotMemTuple(slot);
+				newId = external_insert(resultRelInfo->ri_extInsertDesc, mtuple);
+				ItemPointerSetInvalid(&lastTid);
+			}
+			else
+			{
+				/*
+                 * get the heap tuple out of the tuple table slot, making sure we have a
+                 * writable copy. (external_insert() can scribble on the tuple)
+                 */
+				tuple = ExecMaterializeSlot(slot);
+				if (resultRelationDesc->rd_rel->relhasoids)
+					HeapTupleSetOid(tuple, tuple_oid);
 
-			newId = external_insert(resultRelInfo->ri_extInsertDesc, tuple);
-			ItemPointerSetInvalid(&lastTid);
+				newId = external_insert(resultRelInfo->ri_extInsertDesc, tuple);
+				ItemPointerSetInvalid(&lastTid);
+			}
 		}
 		else
 		{

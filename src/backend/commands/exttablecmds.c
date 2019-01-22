@@ -726,11 +726,13 @@ transformFormatType(char *formatname)
 		result = 'a';
 	else if (pg_strcasecmp(formatname, "parquet") == 0)
 		result = 'p';
+	else if (pg_strcasecmp(formatname, "tuple") == 0)
+		result = 'T';
 	else
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
 				 errmsg("unsupported format '%s'", formatname),
-				 errhint("Available formats for external tables are \"text\", \"csv\", \"avro\", \"parquet\" and \"custom\".")));
+				 errhint("Available formats for external tables are \"text\", \"csv\", \"avro\", \"parquet\", \"tuple\" and \"custom\".")));
 
 	return result;
 }
@@ -788,10 +790,11 @@ transformFormatOpts(char formattype, List *formatOpts, int numcols, bool iswrita
 		   fmttype_is_text(formattype) ||
 		   fmttype_is_csv(formattype) ||
 		   fmttype_is_avro(formattype) ||
+		   fmttype_is_tuple(formattype) ||
 		   fmttype_is_parquet(formattype));
 
 	/* Extract options from the statement node tree */
-	if (fmttype_is_text(formattype) || fmttype_is_csv(formattype))
+	if (fmttype_is_text(formattype) || fmttype_is_csv(formattype) || fmttype_is_tuple(formattype))
 	{
 		foreach(option, formatOpts)
 		{

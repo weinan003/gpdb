@@ -32,6 +32,8 @@ extern int alluxioRead(int streammingid,char *buffer,int amount);
 
 extern int alluxioCacheRead(int streammingid,char *buffer,int amount);
 
+extern struct _alluxioCache *alluxioDirectRead(int streammingid);
+
 extern int alluxioWrite(int streammingid,const char *buffer,int amount);
 
 extern int alluxioClose(int streammingid);

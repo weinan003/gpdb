@@ -276,7 +276,9 @@ external_beginscan(Relation relation, uint32 scancounter,
 	}
 
 	/* Parse fmtOptString here */
-	if (fmttype_is_custom(fmtType))
+	if(fmttype_is_tuple(fmtType))
+		copyFmtOpts = NIL;
+	else if (fmttype_is_custom(fmtType))
 	{
 		copyFmtOpts = NIL;
 		parseCustomFormatString(fmtOptString,
@@ -609,7 +611,11 @@ external_insert_init(Relation rel)
 	 */
 
 	/* Parse fmtOptString here */
-	if (fmttype_is_custom(extentry->fmtcode))
+	if(fmttype_is_tuple(extentry->fmtcode))
+	{
+		copyFmtOpts = NIL;
+	}
+	else if (fmttype_is_custom(extentry->fmtcode))
 	{
 		copyFmtOpts = NIL;
 		parseCustomFormatString(extentry->fmtopts,
@@ -685,6 +691,22 @@ external_insert(ExternalInsertDesc extInsertDesc, HeapTuple instup)
 	/*
 	 * deconstruct the tuple and format it into text
 	 */
+	if(extInsertDesc->ext_pstate->tuple_mode)
+	{
+		MemoryContext oldcontext;
+		MemoryContextReset(pstate->rowcontext);
+		oldcontext = MemoryContextSwitchTo(pstate->rowcontext);
+		appendBinaryStringInfo(pstate->fe_msgbuf, (char *) instup, memtuple_get_size(instup));
+		MemoryContextSwitchTo(oldcontext);
+
+		external_senddata(extInsertDesc->ext_file, pstate);
+		/* Reset our buffer to start clean next round */
+		pstate->fe_msgbuf->len = 0;
+		pstate->fe_msgbuf->data[0] = '\0';
+
+		return 0;
+	}
+
 	if (!customFormat)
 	{
 		/* TEXT or CSV */
@@ -850,6 +872,45 @@ else \
 	FreeErrorData(edata);\
 	if (!IsRejectLimitReached(pstate->cdbsreh)) \
 		pfree(pstate->cdbsreh->errmsg); \
+}
+
+static MemTuple
+externalgettup_tuple(FileScanDesc scan)
+{
+	MemTuple tuple = NULL;
+	MemTuple tuple_ptr;
+	CopyState	pstate = scan->fs_pstate;
+	static char* blockcache;
+	static int32 bc_offset;
+	static bool raw_buf_done = true;
+	static size_t bytesread = 0;
+
+	if(raw_buf_done)
+	{
+		bc_offset = 0;
+		bytesread = url_fread(&blockcache, -1, scan->fs_file, pstate);
+
+		if(bytesread == 0)
+		{
+			pstate->fe_eof = true;
+			scan->fs_inited = false;
+			return NULL;
+		}
+
+		raw_buf_done = false;
+	}
+
+	tuple_ptr = (MemTuple)(blockcache + bc_offset);
+	int32 sz = memtuple_get_size((MemTuple)(blockcache + bc_offset));
+	bc_offset += sz;
+
+	tuple = (MemTuple)palloc0(sz);
+	memcpy(tuple,tuple_ptr,sz);
+
+	if(bc_offset == bytesread)
+		raw_buf_done = true;
+
+	return tuple;
 }
 
 static HeapTuple
@@ -1072,6 +1133,7 @@ externalgettup(FileScanDesc scan,
 			   ScanDirection dir __attribute__((unused)))
 {
 	bool		custom = (scan->fs_custom_formatter_func != NULL);
+	bool 		istuple = scan->fs_pstate->tuple_mode;
 	HeapTuple	tup = NULL;
 	ErrorContextCallback externalscan_error_context;
 
@@ -1094,7 +1156,9 @@ externalgettup(FileScanDesc scan,
 		/* (set current state...) */
 	}
 
-	if (!custom)
+	if(istuple)
+		tup = externalgettup_tuple(scan); /* tuple */
+	else if (!custom)
 		tup = externalgettup_defined(scan); /* text/csv */
 	else
 		tup = externalgettup_custom(scan);  /* custom */
@@ -1232,6 +1296,10 @@ InitParseState(CopyState pstate, Relation relation,
 							  &isvarlena);
 		fmgr_info(out_func_oid, &cstate->out_functions[attnum - 1]);
 	}
+
+
+	if(fmttype_is_tuple(fmtType))
+		pstate->tuple_mode = true;
 
 	/* and 'fe_mgbuf' */
 	cstate->fe_msgbuf = makeStringInfo();
