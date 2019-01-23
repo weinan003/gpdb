@@ -879,12 +879,15 @@ externalgettup_tuple(FileScanDesc scan)
 {
 	MemTuple tuple = NULL;
 	MemTuple tuple_ptr;
+	MemoryContext oldcontext;
 	CopyState	pstate = scan->fs_pstate;
 	static char* blockcache;
 	static int32 bc_offset;
 	static bool raw_buf_done = true;
 	static size_t bytesread = 0;
 
+	MemoryContextReset(pstate->rowcontext);
+	oldcontext = MemoryContextSwitchTo(pstate->rowcontext);
 	if(raw_buf_done)
 	{
 		bc_offset = 0;
@@ -894,6 +897,7 @@ externalgettup_tuple(FileScanDesc scan)
 		{
 			pstate->fe_eof = true;
 			scan->fs_inited = false;
+            MemoryContextSwitchTo(oldcontext);
 			return NULL;
 		}
 
@@ -909,6 +913,8 @@ externalgettup_tuple(FileScanDesc scan)
 
 	if(bc_offset == bytesread)
 		raw_buf_done = true;
+
+	MemoryContextSwitchTo(oldcontext);
 
 	return tuple;
 }

@@ -464,12 +464,10 @@ struct _alluxioCache *alluxioDirectRead(int streammingid)
 {
     if(streammingid)
     {
-        struct timeval begin_tvl,end_tvl;
         struct curl_slist *headers = NULL;
         curl = curl_easy_init();
         if(curl)
         {
-            gettimeofday(&begin_tvl,NULL);
             bzero(alluxio_buffer,ALLUXIO_BUFFER_SZ);
 
             strcpy(alluxio_buffer,alluxio_url);
@@ -494,10 +492,6 @@ struct _alluxioCache *alluxioDirectRead(int streammingid)
 
             curl_slist_free_all(headers);
             curl_easy_cleanup(curl);
-
-            gettimeofday(&end_tvl,NULL);
-            double  used = 1000 *(end_tvl.tv_sec - begin_tvl.tv_sec) + (end_tvl.tv_usec - begin_tvl.tv_usec) /1000;
-            elog(LOG,"ALLUXIO CACHEREAD TIME :%lf",used);
         }
     }
     return &alluxioCache;
