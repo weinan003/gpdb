@@ -259,14 +259,126 @@ alluxioGetOptions(Oid foreigntableid,
     *other_options = options;
 }
 
+static MemTuple
+sampling_alluxio(alluxioHandler  *resHandle,MemoryContext tupcontext)
+{
+    MemTuple tuple = NULL;
+    MemTuple tuple_ptr;
+    MemoryContext oldcontext;
+    static char* blockcache;
+    static int32 bc_offset;
+    static bool raw_buf_done = true;
+    static size_t bytesread = 0;
+    struct _alluxioCache *cache = NULL;
+
+    MemoryContextReset(tupcontext);
+    oldcontext = MemoryContextSwitchTo(tupcontext);
+    if(raw_buf_done)
+    {
+        bc_offset = 0;
+        cache = AlluxioDirectRead(resHandle);
+
+        if(cache == NULL)
+        {
+            MemoryContextSwitchTo(oldcontext);
+            return NULL;
+        }
+
+        bytesread = cache->end - cache->begin;
+        blockcache = cache->begin;
+
+
+        raw_buf_done = false;
+    }
+
+    tuple_ptr = (MemTuple)(blockcache + bc_offset);
+    int32 sz = memtuple_get_size((MemTuple)(blockcache + bc_offset));
+    bc_offset += sz;
+
+    tuple = (MemTuple)palloc0(sz);
+    memcpy(tuple,tuple_ptr,sz);
+
+    if(bc_offset == bytesread)
+        raw_buf_done = true;
+
+    MemoryContextSwitchTo(oldcontext);
+
+    return tuple;
+}
+
 static int
 alluxio_acquire_sample_rows(Relation onerel, int elevel,
                          HeapTuple *rows, int targrows,
                          double *totalrows, double *totaldeadrows)
 {
-    ereport(ERROR,
-            (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                    errmsg("alluxio_fdw sample callback")));
+    int             numrow = 0;
+    TupleTableSlot  *slot;
+    TupleDesc       tupDesc;
+    char            *filename;
+    char            *bracket;
+    int             headLen;
+    List            *options;
+
+    MemoryContext   tupcontext;
+
+    tupDesc = RelationGetDescr(onerel);
+    alluxioGetOptions(RelationGetRelid(onerel),&filename,&options);
+    slot = MakeSingleTupleTableSlot(tupDesc);
+    bracket = strstr(filename,"<SEGID>");
+    headLen = bracket - filename;
+    *totalrows = 0;
+    *totaldeadrows = 0;
+
+    tupcontext = AllocSetContextCreate(CurrentMemoryContext,
+                                       "file_fdw temporary context",
+                                       ALLOCSET_DEFAULT_MINSIZE,
+                                       ALLOCSET_DEFAULT_INITSIZE,
+                                       ALLOCSET_DEFAULT_MAXSIZE);
+
+
+    int segNum = getgpsegmentCount();
+    for(int i = 0;i < segNum && numrow < targrows; i++)
+    {
+        char            *segDir;
+        alluxioHandler  *resHandle;
+
+        segDir = palloc0(strlen(filename) + 10);
+        memcpy(segDir,filename,headLen);
+        sprintf(segDir + headLen,"%d",i);
+        resHandle = createGpalluxioHander();
+        resHandle->url = segDir;
+        AlluxioConnectDir(resHandle);
+        resHandle->blockiter = list_head(resHandle->blocksinfo);
+
+        for(;;) {
+            vacuum_delay_point();
+
+
+            MemTuple mtuple = sampling_alluxio(resHandle,tupcontext);
+
+            if(!mtuple)
+                break;
+
+            ExecStoreGenericTuple(mtuple,slot,false);
+            slot_getallattrs(slot);
+            rows[numrow++]= heap_form_tuple(slot->tts_tupleDescriptor,
+                    slot_get_values(slot),
+                    slot_get_isnull(slot));
+
+            if(numrow == targrows)
+                break;
+        }
+
+        AlluxioDisconnectDir(resHandle);
+        destoryGpalluxioHandler(resHandle);
+        pfree(segDir);
+    }
+
+    ExecDropSingleTupleTableSlot(slot);
+    MemoryContextDelete(tupcontext);
+
+    *totalrows = numrow;
+    return numrow;
 }
 
 static bool
