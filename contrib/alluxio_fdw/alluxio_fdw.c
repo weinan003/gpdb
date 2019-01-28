@@ -27,16 +27,16 @@
 #include "utils/rel.h"
 
 #include "alluxioop.h"
+#include "alluxio_fdw.h"
 
 PG_MODULE_MAGIC;
 
 PG_FUNCTION_INFO_V1(alluxio_fdw_handler);
 PG_FUNCTION_INFO_V1(alluxio_fdw_validator);
 
-static bool
-alluxioAnalyzeForeignTable(Relation relation,
-                           AcquireSampleRowsFunc *func,
-                           BlockNumber *totalpages);
+static void
+alluxioGetOptions(Oid foreigntableid,
+                  char **filename, List **other_options);
 
 Datum alluxio_fdw_validator(PG_FUNCTION_ARGS)
 {
@@ -89,21 +89,445 @@ Datum alluxio_fdw_validator(PG_FUNCTION_ARGS)
     PG_RETURN_VOID();
 }
 
+void
+alluxioGetForeignRelSize(PlannerInfo *root,
+                      RelOptInfo *baserel,
+                      Oid foreigntableid)
+{
+    BlockNumber pages;
+    double		ntuples;
+    double		nrows;
+    struct AlluxioFdwPlanState *fdwPlanState;
+
+    fdwPlanState = (struct AlluxioFdwPlanState *) palloc0(sizeof(struct AlluxioFdwPlanState));
+    alluxioGetOptions(foreigntableid,&fdwPlanState->filename,&fdwPlanState->options);
+    baserel->fdw_private = fdwPlanState;
+
+    alluxioInit();
+    char    *bracket = strstr(fdwPlanState->filename,"<SEGID>");
+    int     headLen = bracket - fdwPlanState->filename;
+
+    int segNum = getgpsegmentCount();
+    size_t  total_sz = 0;
+    for(int i = 0; i < segNum; i++)
+    {
+        char            *segDir;
+        alluxioHandler  *resHandle;
+        ListCell        *cell;
+        size_t          seg_sz;
+
+        segDir = palloc0(strlen(fdwPlanState->filename) + 10);
+        memcpy(segDir,fdwPlanState->filename,headLen);
+        sprintf(segDir + headLen,"%d",i);
+
+        resHandle = createGpalluxioHander();
+        resHandle->url = segDir;
+        AlluxioConnectDir(resHandle);
+
+        seg_sz = 0;
+        foreach(cell,resHandle->blocksinfo)
+        {
+            alluxioBlock *block = (alluxioBlock *) lfirst(cell);
+            seg_sz += block->length;
+        }
+
+        total_sz += seg_sz;
+        AlluxioDisconnectDir(resHandle);
+        destoryGpalluxioHandler(resHandle);
+        pfree(segDir);
+    }
+
+    pages = (total_sz + (BLCKSZ - 1)) / BLCKSZ;
+
+
+    /*
+     * Estimate the number of tuples in the file.
+     */
+    if (baserel->pages > 0)
+    {
+        /*
+         * We have # of pages and # of tuples from pg_class (that is, from a
+         * previous ANALYZE), so compute a tuples-per-page estimate and scale
+         * that by the current file size.
+         */
+        double		density;
+
+        density = baserel->tuples / (double) baserel->pages;
+        ntuples = clamp_row_est(density * (double) pages);
+    }
+    else
+    {
+        /*
+         * Otherwise we have to fake it.  We back into this estimate using the
+         * planner's idea of the relation width; which is bogus if not all
+         * columns are being read, not to mention that the text representation
+         * of a row probably isn't the same size as its internal
+         * representation.  Possibly we could do something better, but the
+         * real answer to anyone who complains is "ANALYZE" ...
+         */
+        int			tuple_width;
+
+        tuple_width = MAXALIGN(baserel->width) +
+                MAXALIGN(sizeof(HeapTupleHeaderData));
+        ntuples = clamp_row_est((double) total_sz /
+                                        (double) tuple_width);
+    }
+    fdwPlanState->ntuples = ntuples;
+
+    /*
+     * Now estimate the number of rows returned by the scan after applying the
+     * baserestrictinfo quals.
+     */
+    nrows = ntuples *
+            clauselist_selectivity(root,
+                                   baserel->baserestrictinfo,
+                                   0,
+                                   JOIN_INNER,
+                                   NULL,
+                                   false); /* GPDB_91_MERGE_FIXME: do we need damping? */
+
+    nrows = clamp_row_est(nrows);
+
+    /* Save the output-rows estimate for the planner */
+    baserel->rows = nrows;
+}
+
+/*
+ * check_selective_binary_conversion
+ *
+ * Check to see if it's useful to convert only a subset of the file's columns
+ * to binary.  If so, construct a list of the column names to be converted,
+ * return that at *columns, and return TRUE.  (Note that it's possible to
+ * determine that no columns need be converted, for instance with a COUNT(*)
+ * query.  So we can't use returning a NIL list to indicate failure.)
+ */
+static bool
+check_selective_binary_conversion(RelOptInfo *baserel,
+                                  Oid foreigntableid,
+                                  List **columns)
+{
+    ForeignTable *table;
+    ListCell   *lc;
+    Relation	rel;
+    TupleDesc	tupleDesc;
+    AttrNumber	attnum;
+    Bitmapset  *attrs_used = NULL;
+    bool		has_wholerow = false;
+    int			numattrs;
+    int			i;
+
+    *columns = NIL;				/* default result */
+
+    /*
+     * Check format of the file.  If binary format, this is irrelevant.
+     */
+    table = GetForeignTable(foreigntableid);
+    foreach(lc, table->options)
+    {
+        DefElem    *def = (DefElem *) lfirst(lc);
+
+        if (strcmp(def->defname, "format") == 0)
+        {
+            char	   *format = defGetString(def);
+
+            if (strcmp(format, "binary") == 0)
+                return false;
+            break;
+        }
+    }
+
+    /* Collect all the attributes needed for joins or final output. */
+    pull_varattnos((Node *) baserel->reltargetlist, baserel->relid,
+                   &attrs_used);
+
+    /* Add all the attributes used by restriction clauses. */
+    foreach(lc, baserel->baserestrictinfo)
+    {
+        RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
+
+        pull_varattnos((Node *) rinfo->clause, baserel->relid,
+                       &attrs_used);
+    }
+
+    /* Convert attribute numbers to column names. */
+    rel = heap_open(foreigntableid, AccessShareLock);
+    tupleDesc = RelationGetDescr(rel);
+
+    while ((attnum = bms_first_member(attrs_used)) >= 0)
+    {
+        /* Adjust for system attributes. */
+        attnum += FirstLowInvalidHeapAttributeNumber;
+
+        if (attnum == 0)
+        {
+            has_wholerow = true;
+            break;
+        }
+
+        /* Ignore system attributes. */
+        if (attnum < 0)
+            continue;
+
+        /* Get user attributes. */
+        if (attnum > 0)
+        {
+            Form_pg_attribute attr = tupleDesc->attrs[attnum - 1];
+            char	   *attname = NameStr(attr->attname);
+
+            /* Skip dropped attributes (probably shouldn't see any here). */
+            if (attr->attisdropped)
+                continue;
+            *columns = lappend(*columns, makeString(pstrdup(attname)));
+        }
+    }
+
+    /* Count non-dropped user attributes while we have the tupdesc. */
+    numattrs = 0;
+    for (i = 0; i < tupleDesc->natts; i++)
+    {
+        Form_pg_attribute attr = tupleDesc->attrs[i];
+
+        if (attr->attisdropped)
+            continue;
+        numattrs++;
+    }
+
+    heap_close(rel, AccessShareLock);
+
+    /* If there's a whole-row reference, fail: we need all the columns. */
+    if (has_wholerow)
+    {
+        *columns = NIL;
+        return false;
+    }
+
+    /* If all the user attributes are needed, fail. */
+    if (numattrs == list_length(*columns))
+    {
+        *columns = NIL;
+        return false;
+    }
+
+    return true;
+}
+
+/*
+ * Estimate costs of scanning a foreign table.
+ *
+ * Results are returned in *startup_cost and *total_cost.
+ */
+static void
+estimate_costs(PlannerInfo *root, RelOptInfo *baserel,
+               struct AlluxioFdwPlanState *fdw_private,
+               Cost *startup_cost, Cost *total_cost)
+{
+    BlockNumber pages = fdw_private->pages;
+    double		ntuples = fdw_private->ntuples;
+    Cost		run_cost = 0;
+    Cost		cpu_per_tuple;
+
+    /*
+     * We estimate costs almost the same way as cost_seqscan(), thus assuming
+     * that I/O costs are equivalent to a regular table file of the same size.
+     * However, we take per-tuple CPU costs as 10x of a seqscan, to account
+     * for the cost of parsing records.
+     */
+    run_cost += seq_page_cost * pages;
+
+    *startup_cost = baserel->baserestrictcost.startup;
+    cpu_per_tuple = cpu_tuple_cost * 10 + baserel->baserestrictcost.per_tuple;
+    run_cost += cpu_per_tuple * ntuples;
+    *total_cost = *startup_cost + run_cost;
+}
+
+/*
+ * alluxioGetForeignPaths
+ *		Create possible access paths for a scan on the foreign table
+ *
+ *		Currently we don't support any push-down feature, so there is only one
+ *		possible access path, which simply returns all records in the order in
+ *		the data file.
+ */
+void
+alluxioGetForeignPaths(PlannerInfo *root,
+                    RelOptInfo *baserel,
+                    Oid foreigntableid)
+{
+    struct AlluxioFdwPlanState *fdw_private = (struct AlluxioFdwPlanState*) baserel->fdw_private;
+    Cost		startup_cost;
+    Cost		total_cost;
+    List	   *columns;
+    List	   *coptions = NIL;
+
+    /* Decide whether to selectively perform binary conversion */
+    if (check_selective_binary_conversion(baserel,
+                                          foreigntableid,
+                                          &columns))
+        coptions = list_make1(makeDefElem("convert_selectively",
+                                          (Node *) columns));
+
+    /* Estimate costs */
+    estimate_costs(root, baserel, fdw_private,
+                   &startup_cost, &total_cost);
+
+    /*
+     * Create a ForeignPath node and add it as only possible path.  We use the
+     * fdw_private list of the path to carry the convert_selectively option;
+     * it will be propagated into the fdw_private list of the Plan node.
+     */
+    add_path(baserel, (Path *)
+            create_foreignscan_path(root, baserel,
+                                    baserel->rows,
+                                    startup_cost,
+                                    total_cost,
+                                    NIL,		/* no pathkeys */
+                                    NULL,		/* no outer rel either */
+                                    coptions));
+
+    /*
+     * If data file was sorted, and we knew it somehow, we could insert
+     * appropriate pathkeys into the ForeignPath node to tell the planner
+     * that.
+     */
+}
+/*
+ * fileGetForeignPlan
+ *		Create a ForeignScan plan node for scanning the foreign table
+ */
+ForeignScan *
+alluxioGetForeignPlan(PlannerInfo *root,
+                   RelOptInfo *baserel,
+                   Oid foreigntableid,
+                   ForeignPath *best_path,
+                   List *tlist,
+                   List *scan_clauses)
+{
+    ForeignScan *fScan;
+    Index		scan_relid = baserel->relid;
+
+    /*
+     * We have no native ability to evaluate restriction clauses, so we just
+     * put all the scan_clauses into the plan node's qual list for the
+     * executor to check.  So all we have to do here is strip RestrictInfo
+     * nodes from the clauses and ignore pseudoconstants (which will be
+     * handled elsewhere).
+     */
+    scan_clauses = extract_actual_clauses(scan_clauses, false);
+
+    /* Create the ForeignScan node */
+    fScan = make_foreignscan(tlist,
+                            scan_clauses,
+                            scan_relid,
+                            NIL,	/* no expressions to evaluate */
+                            best_path->fdw_private);
+    fScan->fdw_private = lappend_int(fScan->fdw_private,baserel->rows);
+    return fScan;
+}
+
+/*
+ * fileEndForeignScan
+ *		Finish scanning foreign table and dispose objects used for this scan
+ */
+void
+alluxioEndForeignScan(ForeignScanState *node)
+{
+    struct AlluxioFdwExecutionState *festate = (AlluxioFdwExecutionState*) node->fdw_state;
+
+    /* if festate is NULL, we are in EXPLAIN; nothing to do */
+    if (festate)
+        EndCopyFrom(festate->cstate);
+}
+
+/*
+ * fileBeginForeignScan
+ *		Initiate access to the file by creating CopyState
+ */
+void
+alluxioBeginForeignScan(ForeignScanState *node, int eflags)
+{
+    ForeignScan *plan = (ForeignScan *) node->ss.ps.plan;
+    char	   *filename;
+    List	   *options;
+    CopyState	cstate;
+    AlluxioFdwExecutionState *festate;
+
+    /*
+     * Do nothing in EXPLAIN (no ANALYZE) case.  node->fdw_state stays NULL.
+     */
+    if (eflags & EXEC_FLAG_EXPLAIN_ONLY)
+        return;
+
+    /* Fetch options of foreign table */
+    alluxioGetOptions(RelationGetRelid(node->ss.ss_currentRelation),
+                   &filename, &options);
+
+    /* Add any options from the plan (currently only convert_selectively) */
+    options = list_concat(options, plan->fdw_private);
+
+    /*
+     * Create CopyState from FDW options.  We always acquire all columns, so
+     * as to match the expected ScanTupleSlot signature.
+     */
+    cstate = BeginCopyFrom(node->ss.ss_currentRelation,
+                           filename,
+                           false, /* is_program */
+                           NULL,  /* data_source_cb */
+                           NULL,  /* data_source_cb_extra */
+                           NIL,   /* attnamelist */
+                           options,
+                           NIL);  /* ao_segnos */
+
+    /*
+     * Save state in node->fdw_state.  We must save enough information to call
+     * BeginCopyFrom() again.
+     */
+    festate = (AlluxioFdwExecutionState *) palloc(sizeof(AlluxioFdwExecutionState));
+    festate->filename = filename;
+    festate->options = options;
+    festate->cstate = cstate;
+
+    node->fdw_state = (void *) festate;
+}
+/*
+ * fileExplainForeignScan
+ *		Produce extra output for EXPLAIN
+ */
+void
+alluxioExplainForeignScan(ForeignScanState *node, ExplainState *es)
+{
+    char	   *filename;
+    List	   *options;
+
+    /* Fetch options --- we only need filename at this point */
+    alluxioGetOptions(RelationGetRelid(node->ss.ss_currentRelation),
+                   &filename, &options);
+
+    ExplainPropertyText("Foreign File", filename, es);
+    /* Suppress file size if we're not showing cost details */
+    if (es->costs)
+    {
+        appendStringInfoSpaces(es->str, es->indent * 2);
+        appendStringInfo(es->str,
+                         " Foreign File cost=%.3f..%.3f rows=%.0f width=%d \n",
+                         node->ss.ps.plan->startup_cost, node->ss.ps.plan->total_cost,
+                         node->ss.ps.plan->plan_rows, node->ss.ps.plan->plan_width);
+    }
+}
 Datum
 alluxio_fdw_handler(PG_FUNCTION_ARGS)
 {
     FdwRoutine *fdwroutine = makeNode(FdwRoutine);
 
     /*
-    fdwroutine->GetForeignRelSize = fileGetForeignRelSize;
-    fdwroutine->GetForeignPaths = fileGetForeignPaths;
-    fdwroutine->GetForeignPlan = fileGetForeignPlan;
-    fdwroutine->ExplainForeignScan = fileExplainForeignScan;
-    fdwroutine->BeginForeignScan = fileBeginForeignScan;
     fdwroutine->IterateForeignScan = fileIterateForeignScan;
     fdwroutine->ReScanForeignScan = fileReScanForeignScan;
-    fdwroutine->EndForeignScan = fileEndForeignScan;
      */
+    fdwroutine->GetForeignRelSize = alluxioGetForeignRelSize;
+    fdwroutine->GetForeignPaths = alluxioGetForeignPaths;
+    fdwroutine->GetForeignPlan = alluxioGetForeignPlan;
+    fdwroutine->BeginForeignScan = alluxioBeginForeignScan;
+    fdwroutine->ExplainForeignScan = alluxioExplainForeignScan;
+    fdwroutine->EndForeignScan = alluxioEndForeignScan;
 
     fdwroutine->AnalyzeForeignTable = alluxioAnalyzeForeignTable;
     PG_RETURN_POINTER(fdwroutine);
@@ -381,7 +805,7 @@ alluxio_acquire_sample_rows(Relation onerel, int elevel,
     return numrow;
 }
 
-static bool
+bool
 alluxioAnalyzeForeignTable(Relation relation,
                         AcquireSampleRowsFunc *func,
                         BlockNumber *totalpages)
