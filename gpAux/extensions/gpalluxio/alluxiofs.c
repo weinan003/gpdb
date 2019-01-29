@@ -39,12 +39,14 @@ alluxioInit()
 {
     //if(!ISHDFSMOD)
     {
-        curl_global_init(CURL_GLOBAL_ALL);
 
         if(!alluxioCache.buffer)
+        {
+            curl_global_init(CURL_GLOBAL_ALL);
             alluxioCache.buffer = malloc(ALLUXIO_CACHE_SZ);
+            alluxioCache.sz = ALLUXIO_CACHE_SZ;
+        }
 
-        alluxioCache.sz = ALLUXIO_CACHE_SZ;
         RESET_ALLUXIOBUFFER();
     }
 }

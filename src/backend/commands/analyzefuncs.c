@@ -17,6 +17,7 @@
 #include "utils/varbit.h"
 #include "miscadmin.h"
 #include "funcapi.h"
+#include "foreign/fdwapi.h"
 
 /**
  * Statistics related parameters.
@@ -392,4 +393,270 @@ gp_acquire_sample_rows_col_type(Oid typid)
 			return TEXTOID;
 	}
 	return typid;
+}
+
+Datum
+gp_fdw_acquire_sample_rows(PG_FUNCTION_ARGS)
+{
+    FuncCallContext *funcctx = NULL;
+    gp_acquire_sample_rows_context *ctx;
+    MemoryContext oldcontext;
+    Oid			relOid = PG_GETARG_OID(0);
+    int32		targrows = PG_GETARG_INT32(1);
+    bool		inherited = PG_GETARG_BOOL(2);
+    HeapTuple  *rows;
+    TupleDesc	relDesc;
+    TupleDesc	outDesc;
+    int			natts;
+
+    if (targrows < 1)
+        elog(ERROR, "invalid targrows argument");
+
+    if (SRF_IS_FIRSTCALL())
+    {
+        double		totalrows;
+        double		totaldeadrows;
+        Relation	onerel;
+        int			attno;
+        int			numrows;
+        int			outattno;
+
+        funcctx = SRF_FIRSTCALL_INIT();
+
+        /*
+         * switch to memory context appropriate for multiple function
+         * calls
+         */
+        oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+
+        if (!pg_class_ownercheck(relOid, GetUserId()))
+            aclcheck_error(ACLCHECK_NOT_OWNER, ACL_KIND_CLASS,
+                           get_rel_name(relOid));
+
+        onerel = relation_open(relOid, AccessShareLock);
+        relDesc = RelationGetDescr(onerel);
+
+        /* Count the number of non-dropped cols */
+        natts = 0;
+        for (attno = 1; attno <= relDesc->natts; attno++)
+        {
+            Form_pg_attribute relatt = (Form_pg_attribute) relDesc->attrs[attno - 1];
+
+            if (relatt->attisdropped)
+                continue;
+            natts++;
+        }
+
+        outDesc = CreateTemplateTupleDesc(3 + natts, false);
+
+        /* First, some special cols: */
+
+        /* These are only set in the last, summary row */
+        TupleDescInitEntry(outDesc,
+                           1,
+                           "totalrows",
+                           FLOAT8OID,
+                           -1,
+                           0);
+        TupleDescInitEntry(outDesc,
+                           2,
+                           "totaldeadrows",
+                           FLOAT8OID,
+                           -1,
+                           0);
+
+        /* extra column to indicate oversize cols */
+        TupleDescInitEntry(outDesc,
+                           3,
+                           "oversized_cols_bitmap",
+                           TEXTOID,
+                           -1,
+                           0);
+
+        outattno = 4;
+        for (attno = 1; attno <= relDesc->natts; attno++)
+        {
+            Form_pg_attribute relatt = (Form_pg_attribute) relDesc->attrs[attno - 1];
+            Oid			typid;
+
+            if (relatt->attisdropped)
+                continue;
+
+            typid = gp_acquire_sample_rows_col_type(relatt->atttypid);
+
+            TupleDescInitEntry(outDesc,
+                               outattno++,
+                               NameStr(relatt->attname),
+                               typid,
+                               relatt->atttypmod,
+                               0);
+        }
+
+        BlessTupleDesc(outDesc);
+        funcctx->tuple_desc = outDesc;
+
+        /*
+         * Collect the actual sample. (We do this only after blessing the output
+         * tuple, to avoid the very expensive work of scanning the table, if we're
+         * going to error out because of incorrect column definition, anyway.
+         * ANALYZE should always get this right, but makes testing manually a bit
+         * more comfortable.)
+         */
+        rows = (HeapTuple *) palloc0(targrows * sizeof(HeapTuple));
+
+        //TODO: grab fdw hook and call back on segments
+        FdwRoutine *fdwroutine = GetFdwRoutineForRelation(onerel, true);
+		numrows = fdwroutine->AnalyzeForeignTableOnSeg(onerel, DEBUG1,
+													   rows, targrows,
+													   &totalrows, &totaldeadrows);
+
+        /* Construct the context to keep across calls. */
+        ctx = (gp_acquire_sample_rows_context *) palloc(sizeof(gp_acquire_sample_rows_context));
+        ctx->onerel = onerel;
+        ctx->natts = natts;
+        funcctx->user_fctx = ctx;
+        ctx->outDesc = outDesc;
+        ctx->numrows = numrows;
+        ctx->rows = rows;
+        ctx->totalrows = totalrows;
+        ctx->totaldeadrows = totaldeadrows;
+
+        ctx->index = 0;
+        ctx->summary_sent = false;
+
+        MemoryContextSwitchTo(oldcontext);
+    }
+
+    /* stuff done on every call of the function */
+    funcctx = SRF_PERCALL_SETUP();
+
+    ctx = funcctx->user_fctx;
+    relDesc = RelationGetDescr(ctx->onerel);
+    outDesc = ctx->outDesc;
+    natts = ctx->natts;
+
+    Datum	   *outvalues = (Datum *) palloc(outDesc->natts * sizeof(Datum));
+    bool	   *outnulls = (bool *) palloc(outDesc->natts * sizeof(bool));
+    HeapTuple	res;
+
+    if (ctx->index < ctx->numrows)
+    {
+        HeapTuple	relTuple = ctx->rows[ctx->index];
+        int			attno;
+        int			outattno;
+        Bitmapset  *toolarge = NULL;
+        Datum	   *relvalues = (Datum *) palloc(relDesc->natts * sizeof(Datum));
+        bool	   *relnulls = (bool *) palloc(relDesc->natts * sizeof(bool));
+
+        heap_deform_tuple(relTuple, relDesc, relvalues, relnulls);
+
+        outattno = 4;
+        for (attno = 1; attno <= relDesc->natts; attno++)
+        {
+            Form_pg_attribute relatt = (Form_pg_attribute) relDesc->attrs[attno - 1];
+            bool		is_toolarge = false;
+            Datum		relvalue;
+            bool		relnull;
+
+            if (relatt->attisdropped)
+                continue;
+            relvalue = relvalues[attno - 1];
+            relnull = relnulls[attno - 1];
+
+            /* Is this attribute "too large" to return? */
+            if (relDesc->attrs[attno - 1]->attlen == -1 && !relnull)
+            {
+                Size		toasted_size = toast_datum_size(relvalue);
+
+                if (toasted_size > WIDTH_THRESHOLD)
+                {
+                    toolarge = bms_add_member(toolarge, outattno - 3);
+                    is_toolarge = true;
+                    relvalue = (Datum) 0;
+                    relnull = true;
+                }
+            }
+            outvalues[outattno - 1] = relvalue;
+            outnulls[outattno - 1] = relnull;
+            outattno++;
+        }
+
+        /*
+         * If any of the attributes were oversized, construct the varbit datum
+         * to represent the bitmap.
+         */
+        if (toolarge)
+        {
+            char	   *toolarge_str;
+            int			i;
+
+            toolarge_str = palloc((natts + 1) * sizeof(char));
+            i = 0;
+            for (attno = 1; attno <= natts; attno++)
+            {
+                Form_pg_attribute relatt = (Form_pg_attribute) relDesc->attrs[attno - 1];
+
+                if (relatt->attisdropped)
+                    continue;
+
+                toolarge_str[i++] = bms_is_member(attno, toolarge) ? '1' : '0';
+            }
+            toolarge_str[i] = '\0';
+
+            outvalues[2] = CStringGetTextDatum(toolarge_str);
+            outnulls[2] = false;
+        }
+        else
+        {
+            outvalues[2] = (Datum) 0;
+            outnulls[2] = true;
+        }
+        outvalues[0] = (Datum) 0;
+        outnulls[0] = true;
+        outvalues[1] = (Datum) 0;
+        outnulls[1] = true;
+
+        res = heap_form_tuple(outDesc, outvalues, outnulls);
+
+        ctx->index++;
+
+        SRF_RETURN_NEXT(funcctx, HeapTupleGetDatum(res));
+    }
+    else if (!ctx->summary_sent)
+    {
+        /* Done returning the sample. Return the summary row, and we're done. */
+        int			outattno;
+
+        for (outattno = 1; outattno <= natts; outattno++)
+        {
+            outvalues[3 + outattno - 1] = (Datum) 0;
+            outnulls[3 + outattno - 1] = true;
+        }
+
+        outvalues[0] = Float8GetDatum(ctx->totalrows);
+        outnulls[0] = false;
+        outvalues[1] = Float8GetDatum(ctx->totaldeadrows);
+        outnulls[1] = false;
+
+        outvalues[2] = (Datum) 0;
+        outnulls[2] = true;
+        for (outattno = 3; outattno < outDesc->natts; outattno++)
+        {
+            outvalues[outattno] = (Datum) 0;
+            outnulls[outattno] = true;
+        }
+
+        res = heap_form_tuple(outDesc, outvalues, outnulls);
+
+        ctx->summary_sent = true;
+
+        SRF_RETURN_NEXT(funcctx, HeapTupleGetDatum(res));
+    }
+
+    relation_close(ctx->onerel, AccessShareLock);
+
+    pfree(ctx);
+    funcctx->user_fctx = NULL;
+
+    SRF_RETURN_DONE(funcctx);
 }

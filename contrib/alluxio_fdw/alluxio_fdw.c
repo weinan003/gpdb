@@ -23,8 +23,33 @@
 #include "optimizer/planmain.h"
 #include "optimizer/restrictinfo.h"
 #include "optimizer/var.h"
+
+#include "funcapi.h"
+#include "libpq-fe.h"
+
+#include "utils/builtins.h"
+#include "utils/lsyscache.h"
+#include "utils/numeric.h"
+#include "utils/syscache.h"
+#include "utils/acl.h"
+#include "utils/attoptcache.h"
+#include "utils/datum.h"
+#include "utils/guc.h"
+#include "utils/lsyscache.h"
 #include "utils/memutils.h"
-#include "utils/rel.h"
+#include "utils/pg_rusage.h"
+#include "utils/sortsupport.h"
+#include "utils/syscache.h"
+#include "utils/timestamp.h"
+#include "utils/tqual.h"
+#include "cdb/cdbappendonlyam.h"
+#include "cdb/cdbaocsam.h"
+#include "cdb/cdbdisp_query.h"
+#include "cdb/cdbdispatchresult.h"
+#include "cdb/cdbpartition.h"
+#include "cdb/cdbtm.h"
+#include "cdb/cdbutil.h"
+#include "cdb/cdbvars.h"
 
 #include "alluxioop.h"
 #include "alluxio_fdw.h"
@@ -34,6 +59,10 @@ PG_MODULE_MAGIC;
 PG_FUNCTION_INFO_V1(alluxio_fdw_handler);
 PG_FUNCTION_INFO_V1(alluxio_fdw_validator);
 
+static int
+alluxio_acquire_sample_rows_on_segment(Relation onerel, int elevel,
+                                       HeapTuple *rows, int targrows,
+                                       double *totalrows, double *totaldeadrows);
 static void
 alluxioGetOptions(Oid foreigntableid,
                   char **filename, List **other_options);
@@ -530,6 +559,7 @@ alluxio_fdw_handler(PG_FUNCTION_ARGS)
     fdwroutine->EndForeignScan = alluxioEndForeignScan;
 
     fdwroutine->AnalyzeForeignTable = alluxioAnalyzeForeignTable;
+    fdwroutine->AnalyzeForeignTableOnSeg = alluxio_acquire_sample_rows_on_segment;
     PG_RETURN_POINTER(fdwroutine);
 }
 
@@ -733,6 +763,230 @@ sampling_alluxio(alluxioHandler  *resHandle,MemoryContext tupcontext)
 static int
 alluxio_acquire_sample_rows(Relation onerel, int elevel,
                          HeapTuple *rows, int targrows,
+                         double *totalrows, double *totaldeadrows) {
+    /*
+     * 'colLargeRowIndexes' is essentially an argument, but it's passed via a
+     * global variable to avoid changing the AcquireSampleRowsFunc prototype.
+     */
+    extern Bitmapset	**acquire_func_colLargeRowIndexes;
+    Bitmapset **colLargeRowIndexes = acquire_func_colLargeRowIndexes;
+    TupleDesc	relDesc = RelationGetDescr(onerel);
+    TupleDesc	newDesc;
+    AttInMetadata *attinmeta;
+    StringInfoData str;
+    int			sampleTuples;	/* 32 bit - assume that number of tuples will not > 2B */
+    char	  **values;
+    int			numLiveColumns;
+    int			perseg_targrows;
+    CdbPgResults cdb_pgresults = {NULL, 0};
+    int			i;
+
+    Assert(targrows > 0.0);
+
+    int segNum = getgpsegmentCount();
+    perseg_targrows = targrows / segNum;
+
+    /*
+     * Count the number of columns, excluding dropped columns. We'll need that
+     * later.
+     */
+    numLiveColumns = 0;
+    for (i = 0; i < relDesc->natts; i++)
+    {
+        Form_pg_attribute attr = relDesc->attrs[i];
+
+        if (attr->attisdropped)
+            continue;
+
+        numLiveColumns++;
+    }
+
+    /*
+     * Construct SQL command to dispatch to segments.
+     */
+    initStringInfo(&str);
+    appendStringInfo(&str, "select * from pg_catalog.gp_fdw_acquire_sample_rows(%u, %d, '%s')",
+                     RelationGetRelid(onerel),
+                     perseg_targrows,
+                     "alluxio" );
+
+    /* special columns */
+    appendStringInfoString(&str, " as (");
+    appendStringInfoString(&str, "totalrows pg_catalog.float8, ");
+    appendStringInfoString(&str, "totaldeadrows pg_catalog.float8, ");
+    appendStringInfoString(&str, "oversized_cols_bitmap pg_catalog.text");
+
+    /* table columns */
+    for (i = 0; i < relDesc->natts; i++)
+    {
+        Form_pg_attribute attr = relDesc->attrs[i];
+        Oid			typid = gp_acquire_sample_rows_col_type(attr->atttypid);
+
+        if (attr->attisdropped)
+            continue;
+
+        appendStringInfo(&str, ", %s %s",
+                         quote_identifier(NameStr(attr->attname)),
+                         format_type_be(typid));
+    }
+
+    appendStringInfoString(&str, ")");
+
+    /*
+     * Execute it.
+     */
+    elog(elevel, "Executing SQL: %s", str.data);
+    CdbDispatchCommand(str.data, DF_WITH_SNAPSHOT, &cdb_pgresults);
+
+    /*
+     * Build a modified tuple descriptor for the table.
+     *
+     * Some datatypes need special treatment, so we cannot use the relation's
+     * original tupledesc.
+     */
+    newDesc = CreateTupleDescCopy(relDesc);
+    for (i = 0; i < relDesc->natts; i++)
+    {
+        Form_pg_attribute attr = relDesc->attrs[i];
+        Oid			typid = gp_acquire_sample_rows_col_type(attr->atttypid);
+
+        newDesc->attrs[i]->atttypid = typid;
+    }
+    attinmeta = TupleDescGetAttInMetadata(newDesc);
+
+    /*
+     * Read the result set from each segment. Gather the sample rows *rows,
+     * and sum up the summary rows for grand 'totalrows' and 'totaldeadrows'.
+     */
+    values = (char **) palloc0(relDesc->natts * sizeof(char *));
+    sampleTuples = 0;
+    *totalrows = 0;
+    *totaldeadrows = 0;
+    for (int resultno = 0; resultno < cdb_pgresults.numResults; resultno++)
+    {
+        struct pg_result *pgresult = cdb_pgresults.pg_results[resultno];
+        bool		got_summary = false;
+        double		this_totalrows = 0;
+        double		this_totaldeadrows = 0;
+
+        if (PQresultStatus(pgresult) != PGRES_TUPLES_OK)
+        {
+            cdbdisp_clearCdbPgResults(&cdb_pgresults);
+            ereport(ERROR,
+                    (errmsg("unexpected result from segment: %d",
+                            PQresultStatus(pgresult))));
+        }
+
+        if (GpPolicyIsReplicated(onerel->rd_cdbpolicy))
+        {
+            /*
+             * A replicated table has the same data in all segments. Arbitrarily,
+             * use the sample from the first segment, and discard the rest.
+             * (This is rather inefficient, of course. It would be better to
+             * dispatch to only one segment, but there is no easy API for that
+             * in the dispatcher.)
+             */
+            if (resultno > 0)
+                continue;
+        }
+
+        for (int rowno = 0; rowno < PQntuples(pgresult); rowno++)
+        {
+            if (!PQgetisnull(pgresult, rowno, 0))
+            {
+                /* This is a summary row. */
+                if (got_summary)
+                    elog(ERROR, "got duplicate summary row from gp_acquire_sample_rows");
+
+                this_totalrows = DatumGetFloat8(DirectFunctionCall1(float8in,
+                                                                    CStringGetDatum(PQgetvalue(pgresult, rowno, 0))));
+                this_totaldeadrows = DatumGetFloat8(DirectFunctionCall1(float8in,
+                                                                        CStringGetDatum(PQgetvalue(pgresult, rowno, 1))));
+                got_summary = true;
+            }
+            else
+            {
+                /* This is a sample row. */
+                int			index;
+
+                if (sampleTuples >= targrows)
+                    elog(ERROR, "too many sample rows received from gp_acquire_sample_rows");
+
+                /* Read the 'toolarge' bitmap, if any */
+                if (colLargeRowIndexes && !PQgetisnull(pgresult, rowno, 2))
+                {
+                    char	   *toolarge;
+
+                    toolarge = PQgetvalue(pgresult, rowno, 2);
+                    if (strlen(toolarge) != numLiveColumns)
+                        elog(ERROR, "'toolarge' bitmap has incorrect length");
+
+                    index = 0;
+                    for (i = 0; i < relDesc->natts; i++)
+                    {
+                        Form_pg_attribute attr = relDesc->attrs[i];
+
+                        if (attr->attisdropped)
+                            continue;
+
+                        if (toolarge[index] == '1')
+                            colLargeRowIndexes[i] = bms_add_member(colLargeRowIndexes[i], sampleTuples);
+                        index++;
+                    }
+                }
+
+                /* Process the columns */
+                index = 0;
+                for (i = 0; i < relDesc->natts; i++)
+                {
+                    Form_pg_attribute attr = relDesc->attrs[i];
+
+                    if (attr->attisdropped)
+                        continue;
+
+                    if (PQgetisnull(pgresult, rowno, 3 + index))
+                        values[i] = NULL;
+                    else
+                        values[i] = PQgetvalue(pgresult, rowno, 3 + index);
+                    index++; /* Move index to the next result set attribute */
+                }
+
+                rows[sampleTuples] = BuildTupleFromCStrings(attinmeta, values);
+                sampleTuples++;
+
+                /*
+                 * note: we don't set the OIDs in the sample. ANALYZE doesn't
+                 * collect stats for them
+                 */
+            }
+        }
+
+        if (!got_summary)
+            elog(ERROR, "did not get summary row from gp_acquire_sample_rows");
+
+        if (resultno >= segNum)
+        {
+            /*
+             * This result is for a segment that's not holding any data for this
+             * table. Should get 0 rows.
+             */
+            if (this_totalrows != 0 || this_totalrows != 0)
+                elog(WARNING, "table \"%s\" contains rows in segment %d, which is outside the # of segments for the table's policy (%d segments)",
+                     RelationGetRelationName(onerel), resultno, onerel->rd_cdbpolicy->numsegments);
+        }
+
+        (*totalrows) += this_totalrows;
+        (*totaldeadrows) += this_totaldeadrows;
+    }
+
+    cdbdisp_clearCdbPgResults(&cdb_pgresults);
+
+    return sampleTuples;
+}
+
+static int
+alluxio_acquire_sample_rows_on_segment(Relation onerel, int elevel,
+                         HeapTuple *rows, int targrows,
                          double *totalrows, double *totaldeadrows)
 {
     int             numrow = 0;
@@ -752,6 +1006,7 @@ alluxio_acquire_sample_rows(Relation onerel, int elevel,
     headLen = bracket - filename;
     *totalrows = 0;
     *totaldeadrows = 0;
+    alluxioInit();
 
     tupcontext = AllocSetContextCreate(CurrentMemoryContext,
                                        "file_fdw temporary context",
@@ -761,7 +1016,7 @@ alluxio_acquire_sample_rows(Relation onerel, int elevel,
 
 
     int segNum = getgpsegmentCount();
-    for(int i = 0;i < segNum && numrow < targrows; i++)
+    int i = GpIdentity.segindex;
     {
         char            *segDir;
         alluxioHandler  *resHandle;
