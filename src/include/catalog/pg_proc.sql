@@ -198,7 +198,7 @@
  CREATE FUNCTION gp_acquire_sample_rows(oid, int4, bool) RETURNS SETOF record LANGUAGE internal VOLATILE STRICT EXECUTE ON ALL SEGMENTS AS 'gp_acquire_sample_rows' WITH (OID=6038, DESCRIPTION="Collect a random sample of rows from table" );
 
 -- FDW Analyze related(reloid, sampling number, fdw type)
- CREATE FUNCTION gp_fdw_acquire_sample_rows(oid, int4, text) RETURNS SETOF record LANGUAGE internal VOLATILE STRICE EXECUTE ON ALL SEGMENTS AS 'gp_fdw_acquire_sampe_rows' WITH (OID=6083, DESCRIPTOR ="MPP Collect sample of rows from fdw table");
+ CREATE FUNCTION gp_fdw_acquire_sample_rows(oid, int4, text) RETURNS SETOF record LANGUAGE internal VOLATILE STRICE EXECUTE ON ALL SEGMENTS AS 'gp_fdw_acquire_sample_rows' WITH (OID=6083, DESCRIPTOR ="MPP Collect sample of rows from fdw table");
 
 -- Backoff related
  CREATE FUNCTION gp_adjust_priority(int4, int4, int4) RETURNS int4 LANGUAGE internal VOLATILE STRICT AS 'gp_adjust_priority_int' WITH (OID=5040, DESCRIPTION="change weight of all the backends for a given session id");
