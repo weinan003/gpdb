@@ -100,7 +100,7 @@ typedef bool (*AnalyzeForeignTable_function) (Relation relation,
 											  AcquireSampleRowsFunc *func,
 											  BlockNumber *totalpages);
 
-typedef bool (*AnalyzeForeignTableOnSeg_function)(Relation onerel, int elevel,
+typedef int (*AnalyzeForeignTableOnSeg_function)(Relation onerel, int elevel,
 												  HeapTuple *rows, int targrows,
 												  double *totalrows, double *totaldeadrows);
 
