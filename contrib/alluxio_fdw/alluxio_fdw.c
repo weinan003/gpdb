@@ -449,7 +449,6 @@ alluxioGetForeignPlan(PlannerInfo *root,
                             scan_relid,
                             NIL,	/* no expressions to evaluate */
                             best_path->fdw_private);
-    fScan->fdw_private = lappend_int(fScan->fdw_private,baserel->rows);
     return fScan;
 }
 
