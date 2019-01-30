@@ -530,17 +530,17 @@ alluxioExplainForeignScan(ForeignScanState *node, ExplainState *es)
     alluxioGetOptions(RelationGetRelid(node->ss.ss_currentRelation),
                    &filename, &options);
 
-    ExplainPropertyText("Foreign File", filename, es);
-    /* Suppress file size if we're not showing cost details */
-    if (es->costs)
-    {
-        appendStringInfoSpaces(es->str, es->indent * 2);
-        appendStringInfo(es->str,
-                         " Foreign File cost=%.3f..%.3f rows=%.0f width=%d \n",
-                         node->ss.ps.plan->startup_cost, node->ss.ps.plan->total_cost,
-                         node->ss.ps.plan->plan_rows, node->ss.ps.plan->plan_width);
-    }
+   // ExplainPropertyText("Foreign File", filename, es);
+   // if (es->costs)
+   // {
+   //     appendStringInfoSpaces(es->str, es->indent * 2);
+   //     appendStringInfo(es->str,
+   //                      " Foreign File cost=%.3f..%.3f rows=%.0f width=%d \n",
+   //                      node->ss.ps.plan->startup_cost, node->ss.ps.plan->total_cost,
+   //                      node->ss.ps.plan->plan_rows, node->ss.ps.plan->plan_width);
+   // }
 }
+
 Datum
 alluxio_fdw_handler(PG_FUNCTION_ARGS)
 {
