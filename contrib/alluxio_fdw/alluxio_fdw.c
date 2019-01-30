@@ -59,6 +59,9 @@ PG_MODULE_MAGIC;
 PG_FUNCTION_INFO_V1(alluxio_fdw_handler);
 PG_FUNCTION_INFO_V1(alluxio_fdw_validator);
 
+static MemTuple
+sampling_alluxio(alluxioHandler  *resHandle,MemoryContext tupcontext);
+
 static int
 alluxio_acquire_sample_rows_on_segment(Relation onerel, int elevel,
                                        HeapTuple *rows, int targrows,
@@ -452,19 +455,6 @@ alluxioGetForeignPlan(PlannerInfo *root,
     return fScan;
 }
 
-/*
- * fileEndForeignScan
- *		Finish scanning foreign table and dispose objects used for this scan
- */
-void
-alluxioEndForeignScan(ForeignScanState *node)
-{
-    struct AlluxioFdwExecutionState *festate = (AlluxioFdwExecutionState*) node->fdw_state;
-
-    /* if festate is NULL, we are in EXPLAIN; nothing to do */
-    if (festate)
-        EndCopyFrom(festate->cstate);
-}
 
 /*
  * fileBeginForeignScan
@@ -476,8 +466,12 @@ alluxioBeginForeignScan(ForeignScanState *node, int eflags)
     ForeignScan *plan = (ForeignScan *) node->ss.ps.plan;
     char	   *filename;
     List	   *options;
-    CopyState	cstate;
+    alluxioHandler *handler;
+    MemoryContext tupcontext;
     AlluxioFdwExecutionState *festate;
+    TupleDesc       tupDesc;
+    char            *segDir;
+    alluxioHandler  *resHandle;
 
     /*
      * Do nothing in EXPLAIN (no ANALYZE) case.  node->fdw_state stays NULL.
@@ -492,18 +486,28 @@ alluxioBeginForeignScan(ForeignScanState *node, int eflags)
     /* Add any options from the plan (currently only convert_selectively) */
     options = list_concat(options, plan->fdw_private);
 
-    /*
-     * Create CopyState from FDW options.  We always acquire all columns, so
-     * as to match the expected ScanTupleSlot signature.
-     */
-    cstate = BeginCopyFrom(node->ss.ss_currentRelation,
-                           filename,
-                           false, /* is_program */
-                           NULL,  /* data_source_cb */
-                           NULL,  /* data_source_cb_extra */
-                           NIL,   /* attnamelist */
-                           options,
-                           NIL);  /* ao_segnos */
+
+    tupDesc = RelationGetDescr(node->ss.ss_currentRelation);
+    char *bracket = strstr(filename,"<SEGID>");
+    int headLen = bracket - filename;
+    alluxioInit();
+
+    tupcontext = AllocSetContextCreate(CurrentMemoryContext,
+                                       "file_fdw temporary context",
+                                       ALLOCSET_DEFAULT_MINSIZE,
+                                       ALLOCSET_DEFAULT_INITSIZE,
+                                       ALLOCSET_DEFAULT_MAXSIZE);
+
+
+    int i = GpIdentity.segindex;
+    segDir = palloc0(strlen(filename) + 10);
+    memcpy(segDir,filename,headLen);
+    sprintf(segDir + headLen,"%d",i);
+    resHandle = createGpalluxioHander();
+    resHandle->url = segDir;
+    AlluxioConnectDir(resHandle);
+    resHandle->blockiter = list_head(resHandle->blocksinfo);
+
 
     /*
      * Save state in node->fdw_state.  We must save enough information to call
@@ -512,10 +516,53 @@ alluxioBeginForeignScan(ForeignScanState *node, int eflags)
     festate = (AlluxioFdwExecutionState *) palloc(sizeof(AlluxioFdwExecutionState));
     festate->filename = filename;
     festate->options = options;
-    festate->cstate = cstate;
+    festate->handler = resHandle;
+    festate->tupcontext = tupcontext;
+;
 
     node->fdw_state = (void *) festate;
 }
+
+TupleTableSlot *
+alluxioIterateForeignScan(ForeignScanState *node)
+{
+    AlluxioFdwExecutionState *festate = (AlluxioFdwExecutionState*) node->fdw_state;
+    TupleTableSlot *slot = node->ss.ss_ScanTupleSlot;
+    ExecClearTuple(slot);
+    MemTuple mtuple = sampling_alluxio(festate->handler,festate->tupcontext);
+
+    if(mtuple)
+        ExecStoreGenericTuple(mtuple,slot,false);
+
+    return slot;
+}
+
+void
+alluxioReScanForeignScan(ForeignScanState *node)
+{
+    AlluxioFdwExecutionState *festate = (AlluxioFdwExecutionState*) node->fdw_state;
+    alluxioHandler *resHandle = festate->handler;
+    AlluxioDisconnectDir(resHandle);
+    destoryGpalluxioHandler(resHandle);
+
+    resHandle = createGpalluxioHander();
+    resHandle->url = festate->filename;
+    AlluxioConnectDir(resHandle);
+    resHandle->blockiter = list_head(resHandle->blocksinfo);
+}
+
+void
+alluxioEndForeignScan(ForeignScanState *node)
+{
+    struct AlluxioFdwExecutionState *festate = (AlluxioFdwExecutionState*) node->fdw_state;
+    alluxioHandler *resHandle = festate->handler;
+
+    pfree(festate->filename);
+    AlluxioDisconnectDir(resHandle);
+    destoryGpalluxioHandler(resHandle);
+    MemoryContextDelete(festate->tupcontext);
+}
+
 /*
  * fileExplainForeignScan
  *		Produce extra output for EXPLAIN
@@ -529,16 +576,6 @@ alluxioExplainForeignScan(ForeignScanState *node, ExplainState *es)
     /* Fetch options --- we only need filename at this point */
     alluxioGetOptions(RelationGetRelid(node->ss.ss_currentRelation),
                    &filename, &options);
-
-   // ExplainPropertyText("Foreign File", filename, es);
-   // if (es->costs)
-   // {
-   //     appendStringInfoSpaces(es->str, es->indent * 2);
-   //     appendStringInfo(es->str,
-   //                      " Foreign File cost=%.3f..%.3f rows=%.0f width=%d \n",
-   //                      node->ss.ps.plan->startup_cost, node->ss.ps.plan->total_cost,
-   //                      node->ss.ps.plan->plan_rows, node->ss.ps.plan->plan_width);
-   // }
 }
 
 Datum
@@ -546,16 +583,15 @@ alluxio_fdw_handler(PG_FUNCTION_ARGS)
 {
     FdwRoutine *fdwroutine = makeNode(FdwRoutine);
 
-    /*
-    fdwroutine->IterateForeignScan = fileIterateForeignScan;
-    fdwroutine->ReScanForeignScan = fileReScanForeignScan;
-     */
     fdwroutine->GetForeignRelSize = alluxioGetForeignRelSize;
     fdwroutine->GetForeignPaths = alluxioGetForeignPaths;
     fdwroutine->GetForeignPlan = alluxioGetForeignPlan;
     fdwroutine->BeginForeignScan = alluxioBeginForeignScan;
     fdwroutine->ExplainForeignScan = alluxioExplainForeignScan;
     fdwroutine->EndForeignScan = alluxioEndForeignScan;
+
+    fdwroutine->IterateForeignScan = alluxioIterateForeignScan;
+    fdwroutine->ReScanForeignScan = alluxioReScanForeignScan;
 
     fdwroutine->AnalyzeForeignTable = alluxioAnalyzeForeignTable;
     fdwroutine->AnalyzeForeignTableOnSeg = alluxio_acquire_sample_rows_on_segment;

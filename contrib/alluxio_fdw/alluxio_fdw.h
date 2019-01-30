@@ -11,6 +11,7 @@
 #include "nodes/makefuncs.h"
 #include "commands/copy.h"
 #include "commands/explain.h"
+#include "alluxioop.h"
 
 typedef struct AlluxioFdwPlanState
 {
@@ -27,8 +28,10 @@ typedef struct AlluxioFdwExecutionState
 {
     char	   *filename;		/* file to read */
     List	   *options;		/* merged COPY options, excluding filename */
-    CopyState	cstate;			/* state of reading file */
     int         rows;
+    alluxioHandler *handler;
+    MemoryContext tupcontext;
+    TupleTableSlot *slot;
 } AlluxioFdwExecutionState;
 
 extern bool
@@ -39,24 +42,30 @@ extern void
 alluxioGetForeignRelSize(PlannerInfo *root,
                          RelOptInfo *baserel,
                          Oid foreigntableid);
-void
+extern void
 alluxioGetForeignPaths(PlannerInfo *root,
                        RelOptInfo *baserel,
                        Oid foreigntableid);
 
-ForeignScan *
+extern ForeignScan *
 alluxioGetForeignPlan(PlannerInfo *root,
                    RelOptInfo *baserel,
                    Oid foreigntableid,
                    ForeignPath *best_path,
                    List *tlist,
                    List *scan_clauses);
-void
+extern void
 alluxioBeginForeignScan(ForeignScanState *node, int eflags);
 
-void
+extern void
 alluxioExplainForeignScan(ForeignScanState *node, ExplainState *es);
 
-void
+extern void
 alluxioEndForeignScan(ForeignScanState *node);
+
+extern TupleTableSlot *
+alluxioIterateForeignScan(ForeignScanState *node);
+
+void
+alluxioReScanForeignScan(ForeignScanState *node);
 #endif //GPDB_ALLUXIO_FDW_C_H
