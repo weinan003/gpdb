@@ -2954,6 +2954,16 @@ expression_tree_mutator(Node *node,
 			MUTATE(newnode->hashKeys, sr->hashKeys, List *);
             return (Node *) newnode;
             }
+		case T_DefElem:
+    		{
+			DefElem *sr = (DefElem *) node;
+			DefElem *newnode;
+
+			FLATCOPY(newnode, sr, DefElem);
+			MUTATE(newnode->arg,sr->arg,Node *);
+
+			return (Node *) newnode;
+		}
 		default:
 			elog(ERROR, "unrecognized node type: %d",
 				 (int) nodeTag(node));
