@@ -1003,6 +1003,7 @@ alluxio_acquire_sample_rows_on_segment(Relation onerel, int elevel,
     slot = MakeSingleTupleTableSlot(tupDesc);
     bracket = strstr(filename,"<SEGID>");
     headLen = bracket - filename;
+    int64 thissegrows = 0;
     *totalrows = 0;
     *totaldeadrows = 0;
     alluxioInit();
@@ -1037,14 +1038,15 @@ alluxio_acquire_sample_rows_on_segment(Relation onerel, int elevel,
             if(!mtuple)
                 break;
 
+            thissegrows ++;
+            if(numrow == targrows)
+                continue;
+
             ExecStoreGenericTuple(mtuple,slot,false);
             slot_getallattrs(slot);
             rows[numrow++]= heap_form_tuple(slot->tts_tupleDescriptor,
                     slot_get_values(slot),
                     slot_get_isnull(slot));
-
-            if(numrow == targrows)
-                break;
         }
 
         AlluxioDisconnectDir(resHandle);
@@ -1055,7 +1057,7 @@ alluxio_acquire_sample_rows_on_segment(Relation onerel, int elevel,
     ExecDropSingleTupleTableSlot(slot);
     MemoryContextDelete(tupcontext);
 
-    *totalrows = numrow;
+    *totalrows = (double) thissegrows;
     return numrow;
 }
 
