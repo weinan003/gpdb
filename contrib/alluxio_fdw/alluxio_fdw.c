@@ -541,6 +541,7 @@ void
 alluxioReScanForeignScan(ForeignScanState *node)
 {
     AlluxioFdwExecutionState *festate = (AlluxioFdwExecutionState*) node->fdw_state;
+
     alluxioHandler *resHandle = festate->handler;
     AlluxioDisconnectDir(resHandle);
     destoryGpalluxioHandler(resHandle);
@@ -555,6 +556,10 @@ void
 alluxioEndForeignScan(ForeignScanState *node)
 {
     struct AlluxioFdwExecutionState *festate = (AlluxioFdwExecutionState*) node->fdw_state;
+
+    if(festate == NULL)
+        return;
+
     alluxioHandler *resHandle = festate->handler;
 
     pfree(festate->filename);
