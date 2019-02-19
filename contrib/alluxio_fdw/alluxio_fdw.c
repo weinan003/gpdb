@@ -53,6 +53,7 @@
 
 #include "alluxioop.h"
 #include "alluxio_fdw.h"
+#include "al_restclient.h"
 
 PG_MODULE_MAGIC;
 
@@ -68,7 +69,7 @@ alluxio_acquire_sample_rows_on_segment(Relation onerel, int elevel,
                                        double *totalrows, double *totaldeadrows);
 static void
 alluxioGetOptions(Oid foreigntableid,
-                  char **filename, List **other_options);
+                  char **relpath, char **localdir, List **other_options);
 
 Datum alluxio_fdw_validator(PG_FUNCTION_ARGS)
 {
@@ -132,10 +133,9 @@ alluxioGetForeignRelSize(PlannerInfo *root,
     struct AlluxioFdwPlanState *fdwPlanState;
 
     fdwPlanState = (struct AlluxioFdwPlanState *) palloc0(sizeof(struct AlluxioFdwPlanState));
-    alluxioGetOptions(foreigntableid,&fdwPlanState->filename,&fdwPlanState->options);
+    alluxioGetOptions(foreigntableid,&fdwPlanState->filename,&fdwPlanState->localdir,&fdwPlanState->options);
     baserel->fdw_private = fdwPlanState;
 
-    alluxioInit();
     char    *bracket = strstr(fdwPlanState->filename,"<SEGID>");
     int     headLen = bracket - fdwPlanState->filename;
 
@@ -143,30 +143,28 @@ alluxioGetForeignRelSize(PlannerInfo *root,
     size_t  total_sz = 0;
     for(int i = 0; i < segNum; i++)
     {
-        char            *segDir;
-        alluxioHandler  *resHandle;
-        ListCell        *cell;
-        size_t          seg_sz;
+        char                    *segDir;
+        ListCell                *cell;
+        size_t                  seg_sz;
+        AlluxioRelationHandler  *handler;
 
         segDir = palloc0(strlen(fdwPlanState->filename) + 10);
         memcpy(segDir,fdwPlanState->filename,headLen);
         sprintf(segDir + headLen,"%d",i);
 
-        resHandle = createGpalluxioHander();
-        resHandle->url = segDir;
-        AlluxioConnectDir(resHandle);
-
+        handler = BeginAlluxioHandler(segDir, fdwPlanState->localdir);
         seg_sz = 0;
-        foreach(cell,resHandle->blocksinfo)
+        foreach(cell, handler->blockLst)
         {
-            alluxioBlock *block = (alluxioBlock *) lfirst(cell);
+            datablock *block = (datablock *) lfirst(cell);
             seg_sz += block->length;
         }
 
         total_sz += seg_sz;
-        AlluxioDisconnectDir(resHandle);
-        destoryGpalluxioHandler(resHandle);
+
         pfree(segDir);
+
+        EndAlluxioHandler(handler);
     }
 
     pages = (total_sz + (BLCKSZ - 1)) / BLCKSZ;
@@ -463,15 +461,14 @@ alluxioGetForeignPlan(PlannerInfo *root,
 void
 alluxioBeginForeignScan(ForeignScanState *node, int eflags)
 {
-    ForeignScan *plan = (ForeignScan *) node->ss.ps.plan;
-    char	   *filename;
-    List	   *options;
-    alluxioHandler *handler;
-    MemoryContext tupcontext;
-    AlluxioFdwExecutionState *festate;
-    TupleDesc       tupDesc;
-    char            *segDir;
-    alluxioHandler  *resHandle;
+    char	                    *relpath;
+    char                        *localdir;
+    List	                    *options;
+    MemoryContext               tupcontext;
+    AlluxioFdwExecutionState    *festate;
+    char                        *segDir;
+    AlluxioRelationHandler      *resHandle;
+    ForeignScan                 *plan;
 
     /*
      * Do nothing in EXPLAIN (no ANALYZE) case.  node->fdw_state stays NULL.
@@ -479,46 +476,33 @@ alluxioBeginForeignScan(ForeignScanState *node, int eflags)
     if (eflags & EXEC_FLAG_EXPLAIN_ONLY)
         return;
 
+    plan = (ForeignScan *) node->ss.ps.plan;
     /* Fetch options of foreign table */
     alluxioGetOptions(RelationGetRelid(node->ss.ss_currentRelation),
-                   &filename, &options);
+                   &relpath, &localdir, &options);
 
     /* Add any options from the plan (currently only convert_selectively) */
     options = list_concat(options, plan->fdw_private);
 
-
-    tupDesc = RelationGetDescr(node->ss.ss_currentRelation);
-    char *bracket = strstr(filename,"<SEGID>");
-    int headLen = bracket - filename;
-    alluxioInit();
-
-    tupcontext = AllocSetContextCreate(CurrentMemoryContext,
-                                       "file_fdw temporary context",
-                                       ALLOCSET_DEFAULT_MINSIZE,
-                                       ALLOCSET_DEFAULT_INITSIZE,
-                                       ALLOCSET_DEFAULT_MAXSIZE);
-
+    char *bracket = strstr(relpath,"<SEGID>");
+    int headLen = bracket - relpath;
 
     int i = GpIdentity.segindex;
-    segDir = palloc0(strlen(filename) + 10);
-    memcpy(segDir,filename,headLen);
+    segDir = palloc0(strlen(relpath) + 10);
+    memcpy(segDir, relpath, headLen);
     sprintf(segDir + headLen,"%d",i);
-    resHandle = createGpalluxioHander();
-    resHandle->url = segDir;
-    AlluxioConnectDir(resHandle);
-    resHandle->blockiter = list_head(resHandle->blocksinfo);
 
+    resHandle = BeginAlluxioHandler(segDir,localdir);
+    resHandle->blockItr = list_head(resHandle->blockLst);
 
     /*
      * Save state in node->fdw_state.  We must save enough information to call
      * BeginCopyFrom() again.
      */
-    festate = (AlluxioFdwExecutionState *) palloc(sizeof(AlluxioFdwExecutionState));
-    festate->filename = filename;
+    festate = (AlluxioFdwExecutionState *) palloc0(sizeof(AlluxioFdwExecutionState));
+    festate->filename = segDir;
     festate->options = options;
     festate->handler = resHandle;
-    festate->tupcontext = tupcontext;
-;
 
     node->fdw_state = (void *) festate;
 }
@@ -533,6 +517,7 @@ alluxioIterateForeignScan(ForeignScanState *node)
 
     if(mtuple)
         ExecStoreGenericTuple(mtuple,slot,false);
+    festate->rows ++;
 
     return slot;
 }
@@ -565,7 +550,6 @@ alluxioEndForeignScan(ForeignScanState *node)
     pfree(festate->filename);
     AlluxioDisconnectDir(resHandle);
     destoryGpalluxioHandler(resHandle);
-    MemoryContextDelete(festate->tupcontext);
 }
 
 /*
@@ -575,12 +559,12 @@ alluxioEndForeignScan(ForeignScanState *node)
 void
 alluxioExplainForeignScan(ForeignScanState *node, ExplainState *es)
 {
-    char	   *filename;
+    char	   *relpath;
     List	   *options;
 
     /* Fetch options --- we only need filename at this point */
     alluxioGetOptions(RelationGetRelid(node->ss.ss_currentRelation),
-                   &filename, &options);
+                   &relpath, NULL, &options);
 }
 
 Datum
@@ -682,14 +666,13 @@ get_alluxio_fdw_attribute_options(Oid relid)
 
 static void
 alluxioGetOptions(Oid foreigntableid,
-               char **filename, List **other_options)
+               char **relpath, char **localdir, List **other_options)
 {
     ForeignTable *table;
     ForeignServer *server;
     ForeignDataWrapper *wrapper;
     List	   *options;
-    ListCell   *lc,
-            *prev;
+    ListCell   *lc;
 
     /*
      * Extract options from FDW objects.  We ignore user mappings because
@@ -712,26 +695,26 @@ alluxioGetOptions(Oid foreigntableid,
     /*
      * Separate out the filename.
      */
-    *filename = NULL;
-    prev = NULL;
+    *relpath = NULL;
     foreach(lc, options)
     {
         DefElem    *def = (DefElem *) lfirst(lc);
 
         if (strcmp(def->defname, "filename") == 0)
         {
-            *filename = defGetString(def);
-            options = list_delete_cell(options, lc, prev);
-            break;
+            *relpath = defGetString(def);
+        } else if(localdir && strcmp(def->defname, "localdir") == 0)
+        {
+            *localdir= defGetString(def);
+
         }
-        prev = lc;
     }
 
     /*
      * The validator should have checked that a filename was included in the
      * options, but check again, just in case.
      */
-    if (*filename == NULL)
+    if (*relpath == NULL)
         elog(ERROR, "filename is required for file_fdw foreign tables");
 
 
@@ -1040,7 +1023,7 @@ alluxio_acquire_sample_rows_on_segment(Relation onerel, int elevel,
     MemoryContext   tupcontext;
 
     tupDesc = RelationGetDescr(onerel);
-    alluxioGetOptions(RelationGetRelid(onerel),&filename,&options);
+    alluxioGetOptions(RelationGetRelid(onerel), &filename, NULL, &options);
     slot = MakeSingleTupleTableSlot(tupDesc);
     bracket = strstr(filename,"<SEGID>");
     headLen = bracket - filename;
@@ -1096,7 +1079,6 @@ alluxio_acquire_sample_rows_on_segment(Relation onerel, int elevel,
     }
 
     ExecDropSingleTupleTableSlot(slot);
-    MemoryContextDelete(tupcontext);
 
     *totalrows = (double) thissegrows;
     return numrow;
@@ -1111,7 +1093,7 @@ alluxioAnalyzeForeignTable(Relation relation,
     List    *options;
 
     alluxioInit();
-    alluxioGetOptions(RelationGetRelid(relation), &filename, &options);
+    alluxioGetOptions(RelationGetRelid(relation), &filename, NULL, &options);
     char    *bracket = strstr(filename,"<SEGID>");
     int     headLen = bracket - filename;
 

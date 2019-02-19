@@ -16,6 +16,7 @@
 typedef struct AlluxioFdwPlanState
 {
     char	   *filename;		/* file to read */
+    char       *localdir;       /* cache data local path */
     List	   *options;		/* merged COPY options, excluding filename */
     BlockNumber pages;			/* estimate of file's physical size */
     double		ntuples;		/* estimate of number of rows in file */

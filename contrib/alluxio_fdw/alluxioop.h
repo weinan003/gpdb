@@ -5,6 +5,25 @@
 #include "utils/resowner.h"
 #include "alluxiofs.h"
 
+typedef struct _AlluxioRelationHandler
+{
+    List            *blockLst;      /* alluxio block info list */
+    MemoryContext   alluxiocontext; /* per-alluxio execution context */
+
+    ListCell        *blockItr;
+    StringInfoData  buffer;
+    StringInfo      relpath;
+    StringInfo      localdir;
+}AlluxioRelationHandler;
+
+typedef struct _datablock
+{
+    int         id;
+    int64       localid;
+    size_t      length;
+    int         streammingid;
+}datablock;
+
 typedef struct alluxioHandler {
     ResourceOwner owner; /* owner of this handle */
 
@@ -32,8 +51,6 @@ void destoryGpalluxioHandler(alluxioHandler* handler);
 
 void abortGpalluxioCallback(ResourceReleasePhase phase,bool isCommit,bool isToplevel,void *arg);
 
-void AlluxioConnectDir(alluxioHandler *handler);
-
 void AlluxioDisconnectDir(alluxioHandler *handler);
 
 int32 AlluxioRead(alluxioHandler *handler,char *buffer,int32 length);
@@ -43,5 +60,8 @@ struct _alluxioCache* AlluxioDirectRead(alluxioHandler *handler);
 int32 AlluxioWrite(alluxioHandler *handler,char *buffer,int32 length);
 
 void AlluxioFileSync(alluxioHandler *handler);
+
+//------
+void AlluxioConnectDir(AlluxioRelationHandler *handler);
 
 #endif

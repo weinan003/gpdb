@@ -2,6 +2,7 @@
 #include "alluxiofs.h"
 #include <json-c/json.h>
 #include <curl/curl.h>
+#include <string.h>
 
 static alluxioHandler *currHandler = NULL;
 extern struct _alluxioCache alluxioCache;
@@ -67,43 +68,43 @@ void abortGpalluxioCallback(ResourceReleasePhase phase,bool isCommit,bool isTopl
 inline static
 size_t traverseFileCallback(void *contents, size_t size, size_t nmemb, void *userp) {
     char* ret = (char *)contents;
-    alluxioHandler *handler = (alluxioHandler* )userp;
-    List **blocklst = &(handler->blocksinfo);
+    AlluxioRelationHandler *handler = (AlluxioRelationHandler *)userp;
+    List **blocklst = &(handler->blockLst);
 
-    memcpy(alluxioCache.end,ret,size * nmemb);
-    alluxioCache.end += size *nmemb;
-    *(alluxioCache.end ) = '\0';
-    json_object *jobj = json_tokener_parse(alluxioCache.buffer);
+    appendBinaryStringInfo(&handler->buffer, ret, size * nmemb);
+    json_object *jobj = json_tokener_parse(handler->buffer.data);
 
     if(json_type_array == json_object_get_type(jobj)) {
         int blocknum = json_object_array_length(jobj);
-        int dirLength = strlen(handler->url);
+        int dirLength = strlen(handler->relpath->data);
 
-        alluxioBlock **ab_array = palloc0(sizeof(alluxioBlock *) * blocknum);
+        datablock **ab_array = palloc0(sizeof(datablock *) * blocknum);
 
         for(int i = 0 ;i < blocknum; i ++)
         {
-            json_object *blocksz,*blockname;
+            json_object *blocksz,*blockname,*blockidarray,*blockid;
             json_object *block = json_object_array_get_idx(jobj,i);
 
-            alluxioBlock* ab = palloc0(sizeof(alluxioBlock));
+            datablock* ab = palloc0(sizeof(datablock));
 
             json_object_object_get_ex(block,"length",&blocksz);
             json_object_object_get_ex(block,"name",&blockname);
+            json_object_object_get_ex(block,"blockIds",&blockidarray);
+            blockid = json_object_array_get_idx(blockidarray,0);
+            ab->localid = json_object_get_int64(blockid);
 
             ab->length = json_object_get_int(blocksz);
             const char* name = json_object_get_string(blockname);
-            ab->name = palloc0(dirLength+ strlen(name) + 2);
-            sprintf(ab->name,"%s/%s",handler->url,name);
-            ab->order = atoi(name);
+            ab->id = atoi(name);
 
-            ab_array[ab->order - 1] = ab;
+            ab_array[ab->id - 1] = ab;
         }
 
         for (int i = 0; i < blocknum; i++)
             *blocklst = lappend(*blocklst, ab_array[i]);
 
         pfree(ab_array);
+        resetStringInfo(&handler->buffer);
     }
 
     json_object_put(jobj);
@@ -111,14 +112,12 @@ size_t traverseFileCallback(void *contents, size_t size, size_t nmemb, void *use
     return size * nmemb;
 }
 
-void AlluxioConnectDir(alluxioHandler *handler)
+void AlluxioConnectDir(AlluxioRelationHandler *handler)
 {
-    if(!alluxioPathExist(handler->url))
-        alluxioMakeDirectory(handler->url,NULL);
+    if(!alluxioPathExist(handler->relpath->data))
+        alluxioMakeDirectory(handler->relpath->data,NULL);
 
-    RESET_ALLUXIOBUFFER();
-    alluxioListStatus(handler->url,traverseFileCallback,handler);
-    RESET_ALLUXIOBUFFER();
+    alluxioListStatus(handler->relpath->data,traverseFileCallback,handler);
 }
 
 void AlluxioDisconnectDir(alluxioHandler *handler)

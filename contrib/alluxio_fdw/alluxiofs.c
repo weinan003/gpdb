@@ -33,16 +33,16 @@ static char alluxio_buffer[ALLUXIO_BUFFER_SZ];
 char* alluxio_url = "localhost:39999/api/v1/paths//gpdb";
 size_t alluxio_blocksize = 0;
 struct _alluxioCache alluxioCache = {NULL,0,NULL,NULL};
-
 void
 alluxioInit()
 {
-    curl_global_init(CURL_GLOBAL_ALL);
-
     if(!alluxioCache.buffer)
+    {
+        curl_global_init(CURL_GLOBAL_ALL);
         alluxioCache.buffer = malloc(ALLUXIO_CACHE_SZ);
+        alluxioCache.sz = ALLUXIO_CACHE_SZ;
+    }
 
-    alluxioCache.sz = ALLUXIO_CACHE_SZ;
     RESET_ALLUXIOBUFFER();
 }
 

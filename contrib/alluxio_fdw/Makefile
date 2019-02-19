@@ -1,7 +1,7 @@
 # contrib/alluxio_fdw/Makefile
 
 MODULE_big = alluxio_fdw
-OBJS = alluxioop.o alluxio_fdw.o alluxiofs.o 
+OBJS = alluxioop.o alluxio_fdw.o alluxiofs.o al_restclinent.o
 EXTENSION = alluxio_fdw
 DATA = alluxio_fdw--1.0.sql
 
