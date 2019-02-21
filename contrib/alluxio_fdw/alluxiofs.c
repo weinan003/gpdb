@@ -490,3 +490,42 @@ struct _alluxioCache *alluxioDirectRead(int streammingid)
     }
     return &alluxioCache;
 }
+
+inline static
+size_t cache_data(void* contents, size_t size, size_t nmemb, void* userp)
+{
+    return -1;
+}
+
+void alluxioCacheData(int streammingid)
+{
+    struct curl_slist *headers = NULL;
+    curl = curl_easy_init();
+    if(curl)
+    {
+        bzero(alluxio_buffer,ALLUXIO_BUFFER_SZ);
+
+
+        strcpy(alluxio_buffer,alluxio_url);
+        sprintf(alluxio_buffer,"http://%s",alluxio_url);
+        char *pstr = strstr(alluxio_buffer,"/v1") + 3;
+        int offset = sprintf(pstr,"/streams/%d/read?", streammingid);
+        *(pstr + offset) = '\0';
+
+        curl_easy_setopt(curl,CURLOPT_URL,alluxio_buffer);
+
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        curl_easy_setopt(curl,CURLOPT_POSTFIELDS,"{}");
+        curl_easy_setopt(curl,CURLOPT_POSTFIELDSIZE,-1L);
+
+        curl_easy_setopt(curl,CURLOPT_WRITEFUNCTION, cache_data);
+        curl_easy_setopt(curl,CURLOPT_WRITEDATA,NULL);
+
+        curl_easy_perform(curl);
+
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+    }
+
+}

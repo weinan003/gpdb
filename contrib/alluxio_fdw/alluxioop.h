@@ -22,6 +22,9 @@ typedef struct _datablock
     int64       localid;
     size_t      length;
     int         streammingid;
+
+    int         localfd;
+    size_t      cur_offset;
 }datablock;
 
 typedef struct alluxioHandler {
@@ -51,17 +54,16 @@ void destoryGpalluxioHandler(alluxioHandler* handler);
 
 void abortGpalluxioCallback(ResourceReleasePhase phase,bool isCommit,bool isToplevel,void *arg);
 
-void AlluxioDisconnectDir(alluxioHandler *handler);
-
 int32 AlluxioRead(alluxioHandler *handler,char *buffer,int32 length);
 
 struct _alluxioCache* AlluxioDirectRead(alluxioHandler *handler);
 
 int32 AlluxioWrite(alluxioHandler *handler,char *buffer,int32 length);
 
-void AlluxioFileSync(alluxioHandler *handler);
-
 //------
+void AlluxioFileSync(AlluxioRelationHandler *handler);
+
 void AlluxioConnectDir(AlluxioRelationHandler *handler);
 
+void AlluxioDisconnectDir(AlluxioRelationHandler *handler);
 #endif

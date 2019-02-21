@@ -27,10 +27,11 @@ typedef struct AlluxioFdwPlanState
  */
 typedef struct AlluxioFdwExecutionState
 {
-    char	   *filename;		/* file to read */
-    List	   *options;		/* merged COPY options, excluding filename */
+    char	    *filename;		/* file to read */
+    char        *localdir;
+    List	    *options;		/* merged COPY options, excluding filename */
     int         rows;
-    alluxioHandler *handler;
+    AlluxioRelationHandler *handler;
     MemoryContext tupcontext;
     TupleTableSlot *slot;
 } AlluxioFdwExecutionState;

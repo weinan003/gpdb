@@ -14,8 +14,6 @@ typedef struct _alluxioCache
 
 extern void alluxioInit();
 
-extern void alluxioDestory();
-
 extern void alluxioListStatus(char* path,
                   size_t (*callback)(void *contents, size_t size, size_t nmemb, void *userp),
                   void* ret);
@@ -32,7 +30,7 @@ extern int alluxioRead(int streammingid,char *buffer,int amount);
 
 extern int alluxioCacheRead(int streammingid,char *buffer,int amount);
 
-extern struct _alluxioCache *alluxioDirectRead(int streammingid);
+extern void alluxioCacheData(int streammingid);
 
 extern int alluxioWrite(int streammingid,const char *buffer,int amount);
 

@@ -3,67 +3,7 @@
 #include <json-c/json.h>
 #include <curl/curl.h>
 #include <string.h>
-
-static alluxioHandler *currHandler = NULL;
-extern struct _alluxioCache alluxioCache;
-
-alluxioHandler* createGpalluxioHander()
-{
-    alluxioHandler *handler;
-
-    handler = (alluxioHandler *)MemoryContextAlloc(TopMemoryContext,sizeof(alluxioHandler));
-
-    handler->owner = CurrentResourceOwner;
-    handler->next = currHandler;
-    handler->prev = NULL;
-    handler->blocksinfo = NULL;
-    handler->blockiter = NULL;
-
-    if(currHandler)
-        currHandler->prev = handler;
-
-    currHandler = handler;
-
-    return handler;
-}
-
-void destoryGpalluxioHandler(alluxioHandler* handler)
-{
-    if (handler == NULL) return;
-
-    if(handler->prev)
-        handler->prev->next = handler->next;
-    else
-        currHandler = handler->next;
-
-    if(handler->next)
-        handler->next->prev = handler->prev;
-
-    pfree(handler);
-}
-
-void abortGpalluxioCallback(ResourceReleasePhase phase,bool isCommit,bool isToplevel,void *arg)
-{
-    alluxioHandler *curr;
-
-    if(phase != RESOURCE_RELEASE_AFTER_LOCKS) return;
-
-    curr = currHandler;
-    while (curr)
-    {
-
-        if(curr->owner == CurrentResourceOwner)
-        {
-            if(isCommit)
-                elog(WARNING, "gpalluxio external table reference leak: %p still referenced", curr);
-
-            AlluxioDisconnectDir(curr);
-            destoryGpalluxioHandler(curr);
-        }
-
-        curr = curr->next;
-    }
-}
+#include "utils/memutils.h"
 
 inline static
 size_t traverseFileCallback(void *contents, size_t size, size_t nmemb, void *userp) {
@@ -120,19 +60,10 @@ void AlluxioConnectDir(AlluxioRelationHandler *handler)
     alluxioListStatus(handler->relpath->data,traverseFileCallback,handler);
 }
 
-void AlluxioDisconnectDir(alluxioHandler *handler)
+void AlluxioDisconnectDir(AlluxioRelationHandler *handler)
 {
     AlluxioFileSync(handler);
-
-    ListCell *lc = NULL;
-    foreach(lc,handler->blocksinfo)
-    {
-        pfree(((alluxioBlock *)lfirst(lc))->name);
-        pfree((alluxioBlock *)lfirst(lc));
-    }
-    list_free(handler->blocksinfo);
-
-    handler->url = NULL;
+    MemoryContextReset(handler->alluxiocontext);
 }
 
 int32 AlluxioRead(alluxioHandler *handler,char *buffer,int32 length)
@@ -212,30 +143,13 @@ int32 AlluxioWrite(alluxioHandler *handler,char *buffer,int32 length)
     return returnCode;
 }
 
-void AlluxioFileSync(alluxioHandler *handler){
-
-    if(handler->blockiter
-            && (((alluxioBlock*)lfirst(handler->blockiter))->streammingid))
+void AlluxioFileSync(AlluxioRelationHandler *handler){
+    if (handler->blockItr
+    && ((datablock *)lfirst(handler->blockItr))->streammingid)
     {
-        alluxioClose(((alluxioBlock *)lfirst(handler->blockiter))->streammingid);
-        ((alluxioBlock *)lfirst(handler->blockiter))->streammingid = 0;
-        ((alluxioBlock *)lfirst(handler->blockiter))->writable = false;
+        alluxioClose(((datablock *)lfirst(handler->blockItr))->streammingid);
+        ((datablock *)lfirst(handler->blockItr))->streammingid = 0;
     }
 
 }
 
-struct _alluxioCache* AlluxioDirectRead(alluxioHandler *handler)
-{
-    struct _alluxioCache *cache = NULL;
-    int streammingid;
-    if(handler->blockiter) {
-        streammingid = alluxioOpenFile(((alluxioBlock *)lfirst(handler->blockiter))->name);
-
-        cache = alluxioDirectRead(streammingid);
-        alluxioClose(streammingid);
-        handler->blockiter = lnext(handler->blockiter);
-
-    }
-
-    return cache;
-}

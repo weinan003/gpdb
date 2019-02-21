@@ -5,6 +5,7 @@
 
 #include <unistd.h>
 #include <memory.h>
+#include <curl/curl.h>
 
 #include "access/htup_details.h"
 #include "access/reloptions.h"
@@ -122,25 +123,15 @@ Datum alluxio_fdw_validator(PG_FUNCTION_ARGS)
     PG_RETURN_VOID();
 }
 
-void
-alluxioGetForeignRelSize(PlannerInfo *root,
-                      RelOptInfo *baserel,
-                      Oid foreigntableid)
+static size_t
+getallsegsz(char *filename)
 {
-    BlockNumber pages;
-    double		ntuples;
-    double		nrows;
-    struct AlluxioFdwPlanState *fdwPlanState;
+    size_t  total_sz;
+    char    *bracket = strstr(filename,"<SEGID>");
+    long    headLen = bracket - filename;
 
-    fdwPlanState = (struct AlluxioFdwPlanState *) palloc0(sizeof(struct AlluxioFdwPlanState));
-    alluxioGetOptions(foreigntableid,&fdwPlanState->filename,&fdwPlanState->localdir,&fdwPlanState->options);
-    baserel->fdw_private = fdwPlanState;
-
-    char    *bracket = strstr(fdwPlanState->filename,"<SEGID>");
-    int     headLen = bracket - fdwPlanState->filename;
-
+    total_sz = 0;
     int segNum = getgpsegmentCount();
-    size_t  total_sz = 0;
     for(int i = 0; i < segNum; i++)
     {
         char                    *segDir;
@@ -148,11 +139,11 @@ alluxioGetForeignRelSize(PlannerInfo *root,
         size_t                  seg_sz;
         AlluxioRelationHandler  *handler;
 
-        segDir = palloc0(strlen(fdwPlanState->filename) + 10);
-        memcpy(segDir,fdwPlanState->filename,headLen);
+        segDir = palloc0(strlen(filename) + 10);
+        memcpy(segDir,filename,headLen);
         sprintf(segDir + headLen,"%d",i);
 
-        handler = BeginAlluxioHandler(segDir, fdwPlanState->localdir);
+        handler = BeginAlluxioHandler(segDir, NULL);
         seg_sz = 0;
         foreach(cell, handler->blockLst)
         {
@@ -166,6 +157,25 @@ alluxioGetForeignRelSize(PlannerInfo *root,
 
         EndAlluxioHandler(handler);
     }
+    return total_sz;
+}
+
+void
+alluxioGetForeignRelSize(PlannerInfo *root,
+                      RelOptInfo *baserel,
+                      Oid foreigntableid)
+{
+    BlockNumber pages;
+    double		ntuples;
+    double		nrows;
+    size_t      total_sz;
+    struct AlluxioFdwPlanState *fdwPlanState;
+
+    fdwPlanState = (struct AlluxioFdwPlanState *) palloc0(sizeof(struct AlluxioFdwPlanState));
+    alluxioGetOptions(foreigntableid,&fdwPlanState->filename,&fdwPlanState->localdir,&fdwPlanState->options);
+    baserel->fdw_private = fdwPlanState;
+
+    total_sz = getallsegsz(fdwPlanState->filename);
 
     pages = (total_sz + (BLCKSZ - 1)) / BLCKSZ;
 
@@ -497,10 +507,11 @@ alluxioBeginForeignScan(ForeignScanState *node, int eflags)
 
     /*
      * Save state in node->fdw_state.  We must save enough information to call
-     * BeginCopyFrom() again.
+     * BeginAlluxioHandler() again.
      */
     festate = (AlluxioFdwExecutionState *) palloc0(sizeof(AlluxioFdwExecutionState));
     festate->filename = segDir;
+    festate->localdir = localdir;
     festate->options = options;
     festate->handler = resHandle;
 
@@ -513,7 +524,8 @@ alluxioIterateForeignScan(ForeignScanState *node)
     AlluxioFdwExecutionState *festate = (AlluxioFdwExecutionState*) node->fdw_state;
     TupleTableSlot *slot = node->ss.ss_ScanTupleSlot;
     ExecClearTuple(slot);
-    MemTuple mtuple = sampling_alluxio(festate->handler,festate->tupcontext);
+
+    MemTuple mtuple = NextTupleFromAlluxioHandler(festate->handler);
 
     if(mtuple)
         ExecStoreGenericTuple(mtuple,slot,false);
@@ -527,14 +539,9 @@ alluxioReScanForeignScan(ForeignScanState *node)
 {
     AlluxioFdwExecutionState *festate = (AlluxioFdwExecutionState*) node->fdw_state;
 
-    alluxioHandler *resHandle = festate->handler;
-    AlluxioDisconnectDir(resHandle);
-    destoryGpalluxioHandler(resHandle);
+    EndAlluxioHandler(festate->handler);
 
-    resHandle = createGpalluxioHander();
-    resHandle->url = festate->filename;
-    AlluxioConnectDir(resHandle);
-    resHandle->blockiter = list_head(resHandle->blocksinfo);
+    festate->handler = BeginAlluxioHandler(festate->filename,festate->localdir);
 }
 
 void
@@ -549,7 +556,7 @@ alluxioEndForeignScan(ForeignScanState *node)
 
     pfree(festate->filename);
     AlluxioDisconnectDir(resHandle);
-    destoryGpalluxioHandler(resHandle);
+    pfree(resHandle);
 }
 
 /*
@@ -584,6 +591,9 @@ alluxio_fdw_handler(PG_FUNCTION_ARGS)
 
     fdwroutine->AnalyzeForeignTable = alluxioAnalyzeForeignTable;
     fdwroutine->AnalyzeForeignTableOnSeg = alluxio_acquire_sample_rows_on_segment;
+
+    curl_global_init(CURL_GLOBAL_ALL);
+
     PG_RETURN_POINTER(fdwroutine);
 }
 
@@ -1016,67 +1026,50 @@ alluxio_acquire_sample_rows_on_segment(Relation onerel, int elevel,
     TupleTableSlot  *slot;
     TupleDesc       tupDesc;
     char            *filename;
+    char            *segDir;
+    char            *localdir;
     char            *bracket;
     int             headLen;
     List            *options;
-
-    MemoryContext   tupcontext;
-
-    tupDesc = RelationGetDescr(onerel);
-    alluxioGetOptions(RelationGetRelid(onerel), &filename, NULL, &options);
-    slot = MakeSingleTupleTableSlot(tupDesc);
-    bracket = strstr(filename,"<SEGID>");
-    headLen = bracket - filename;
+    AlluxioRelationHandler *resHandler;
     int64 thissegrows = 0;
     *totalrows = 0;
     *totaldeadrows = 0;
-    alluxioInit();
-
-    tupcontext = AllocSetContextCreate(CurrentMemoryContext,
-                                       "file_fdw temporary context",
-                                       ALLOCSET_DEFAULT_MINSIZE,
-                                       ALLOCSET_DEFAULT_INITSIZE,
-                                       ALLOCSET_DEFAULT_MAXSIZE);
 
 
-    int segNum = getgpsegmentCount();
+    tupDesc = RelationGetDescr(onerel);
+    slot = MakeSingleTupleTableSlot(tupDesc);
+    alluxioGetOptions(RelationGetRelid(onerel), &filename, &localdir, &options);
+
     int i = GpIdentity.segindex;
-    {
-        char            *segDir;
-        alluxioHandler  *resHandle;
+    segDir = palloc0(strlen(filename) + 10);
+    bracket = strstr(filename,"<SEGID>");
+    headLen = bracket - filename;
+    memcpy(segDir, filename, headLen);
+    sprintf(segDir + headLen,"%d",i);
 
-        segDir = palloc0(strlen(filename) + 10);
-        memcpy(segDir,filename,headLen);
-        sprintf(segDir + headLen,"%d",i);
-        resHandle = createGpalluxioHander();
-        resHandle->url = segDir;
-        AlluxioConnectDir(resHandle);
-        resHandle->blockiter = list_head(resHandle->blocksinfo);
+    resHandler = BeginAlluxioHandler(segDir,localdir);
 
-        for(;;) {
-            vacuum_delay_point();
+    for(;;) {
+        vacuum_delay_point();
 
+        MemTuple mtuple = NextTupleFromAlluxioHandler(resHandler);
 
-            MemTuple mtuple = sampling_alluxio(resHandle,tupcontext);
+        if(!mtuple)
+            break;
 
-            if(!mtuple)
-                break;
+        thissegrows ++;
+        if(numrow == targrows)
+            continue;
 
-            thissegrows ++;
-            if(numrow == targrows)
-                continue;
-
-            ExecStoreGenericTuple(mtuple,slot,false);
-            slot_getallattrs(slot);
-            rows[numrow++]= heap_form_tuple(slot->tts_tupleDescriptor,
-                    slot_get_values(slot),
-                    slot_get_isnull(slot));
-        }
-
-        AlluxioDisconnectDir(resHandle);
-        destoryGpalluxioHandler(resHandle);
-        pfree(segDir);
+        ExecStoreGenericTuple(mtuple,slot,false);
+        slot_getallattrs(slot);
+        rows[numrow++]= heap_form_tuple(slot->tts_tupleDescriptor,
+                                        slot_get_values(slot),
+                                        slot_get_isnull(slot));
     }
+
+    EndAlluxioHandler(resHandler);
 
     ExecDropSingleTupleTableSlot(slot);
 
@@ -1090,42 +1083,13 @@ alluxioAnalyzeForeignTable(Relation relation,
                         BlockNumber *totalpages)
 {
     char    *filename;
+    char    *localdir;
     List    *options;
+    size_t  total_sz;
 
-    alluxioInit();
-    alluxioGetOptions(RelationGetRelid(relation), &filename, NULL, &options);
-    char    *bracket = strstr(filename,"<SEGID>");
-    int     headLen = bracket - filename;
+    alluxioGetOptions(RelationGetRelid(relation), &filename, &localdir, &options);
 
-    int segNum = getgpsegmentCount();
-    size_t  total_sz = 0;
-    for(int i = 0; i < segNum; i++)
-    {
-        char            *segDir;
-        alluxioHandler  *resHandle;
-        ListCell        *cell;
-        size_t          seg_sz;
-
-        segDir = palloc0(strlen(filename) + 10);
-        memcpy(segDir,filename,headLen);
-        sprintf(segDir + headLen,"%d",i);
-
-        resHandle = createGpalluxioHander();
-        resHandle->url = segDir;
-        AlluxioConnectDir(resHandle);
-
-        seg_sz = 0;
-        foreach(cell,resHandle->blocksinfo)
-        {
-            alluxioBlock *block = (alluxioBlock *) lfirst(cell);
-            seg_sz += block->length;
-        }
-
-        total_sz += seg_sz;
-        AlluxioDisconnectDir(resHandle);
-        destoryGpalluxioHandler(resHandle);
-        pfree(segDir);
-    }
+    total_sz = getallsegsz(filename);
 
     *totalpages = (total_sz + (BLCKSZ - 1)) / BLCKSZ;
     *func = alluxio_acquire_sample_rows;
