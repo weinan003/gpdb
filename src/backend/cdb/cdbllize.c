@@ -398,6 +398,31 @@ ParallelizeCorrelatedSubPlanUpdateFlowMutator(Node *node)
 	return node;
 }
 
+static bool
+IsAppendUponPartition(Node * node)
+{
+	if(!IsA(node, Append))
+		return false;
+
+	Append *append = (Append *) node;
+	ListCell *lc;
+	foreach(lc, append->appendplans)
+	{
+		Node *apNode = (Node *)lfirst(lc);
+		if(IsA(apNode, SeqScan)
+				|| IsA(apNode, ShareInputScan)
+				|| IsA(apNode, ExternalScan))
+		{
+			if(((SeqScan *)apNode)->plan.flow->flotype != FLOW_PARTITIONED)
+				return false;
+		}
+		else
+			return false;
+	}
+
+	return true;
+}
+
 /**
  * This is the workhorse method that transforms a plan containing correlated references
  * to one that is executable as part of a parallel plan.
@@ -449,7 +474,8 @@ ParallelizeCorrelatedSubPlanMutator(Node *node, ParallelizeCorrelatedPlanWalkerC
 		}
 	}
 
-	if (IsA(node, SeqScan)
+	if (IsAppendUponPartition(node)
+		||IsA(node, SeqScan)
 		||IsA(node, ShareInputScan)
 		||IsA(node, ExternalScan))
 	{
