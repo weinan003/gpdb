@@ -398,6 +398,10 @@ ParallelizeCorrelatedSubPlanUpdateFlowMutator(Node *node)
 	return node;
 }
 
+/**
+ * IsAppendUponPartition
+ * under Append node all must be PARTITIONED table
+ */
 static bool
 IsAppendUponPartition(Node * node)
 {
@@ -406,6 +410,7 @@ IsAppendUponPartition(Node * node)
 
 	Append *append = (Append *) node;
 	ListCell *lc;
+	//List* firstQual = NIL;
 	foreach(lc, append->appendplans)
 	{
 		Node *apNode = (Node *)lfirst(lc);
@@ -413,8 +418,21 @@ IsAppendUponPartition(Node * node)
 				|| IsA(apNode, ShareInputScan)
 				|| IsA(apNode, ExternalScan))
 		{
-			if(((SeqScan *)apNode)->plan.flow->flotype != FLOW_PARTITIONED)
+			Plan *scanPlan = (Plan*)apNode;
+
+			/* do not optimize if scan a catalog table */
+			if (scanPlan->flow && (scanPlan->flow->locustype == CdbLocusType_Entry))
 				return false;
+
+			/* do not optimize if scan does not below to partitioned form */
+			if(scanPlan->flow->flotype != FLOW_PARTITIONED)
+				return false;
+
+			/* do not optimize if scan node have different qual */
+			//if(NIL == firstQual)
+			//	firstQual = scanPlan->qual;
+			//else if(!equal(firstQual,scanPlan->qual))
+			//	return false;
 		}
 		else
 			return false;
@@ -474,10 +492,161 @@ ParallelizeCorrelatedSubPlanMutator(Node *node, ParallelizeCorrelatedPlanWalkerC
 		}
 	}
 
-	if (IsAppendUponPartition(node)
-		||IsA(node, SeqScan)
-		||IsA(node, ShareInputScan)
-		||IsA(node, ExternalScan))
+	if(IsAppendUponPartition(node))
+	{
+		Append      *append = (Append *) node;
+
+		Plan* samplingScanPlan = (Plan *)lfirst(append->appendplans->head);
+
+		/**
+		 * Step 1: Save targetlist, quals and paramset from the scan node
+		 */
+		List	   *saveTL = copyObject(samplingScanPlan->targetlist);
+		Bitmapset  *saveAllParam = bms_copy(samplingScanPlan->allParam);
+		Bitmapset  *saveExtParam = bms_copy(samplingScanPlan->extParam);
+		List       *samplingQual = NIL;
+
+		ListCell    *lc = NULL;
+		foreach(lc,append->appendplans)
+		{
+			Plan* scanPlan = (Plan *)lfirst(lc);
+
+			/**
+			 * Step 2: Next, iterate over quals and find out if they need to be part of the scan or the result node.
+			 */
+			ListCell   *lc_qual = NULL;
+			List	   *resQual = NIL;
+			List	   *scanQual = NIL;
+
+			foreach(lc_qual, scanPlan->qual)
+			{
+				Node	   *qual = (Node *) lfirst(lc_qual);
+
+				if (ContainsParamWalker(qual, NULL /* ctx */ ))
+				{
+					resQual = lappend(resQual, qual);
+				}
+				else
+				{
+					scanQual = lappend(scanQual, qual);
+				}
+			}
+
+			scanPlan->qual = scanQual;
+			scanPlan->allParam = NULL;
+			scanPlan->extParam = NULL;
+
+			/**
+			 * Step 3: Find all the vars that are needed from the scan node
+			 * for upstream processing.
+			 */
+			/* GPDB_84_MERGE_FIXME: What are the correct PVC_* modes here? */
+			List	   *scanVars;
+
+			scanVars = list_concat(
+					pull_var_clause((Node *) scanPlan->targetlist,
+					                PVC_RECURSE_AGGREGATES,
+					                PVC_REJECT_PLACEHOLDERS),
+					pull_var_clause((Node *) resQual,
+					                PVC_RECURSE_AGGREGATES,
+					                PVC_REJECT_PLACEHOLDERS));
+			if(samplingQual == NIL)
+			samplingQual = resQual;
+
+			/*
+			 * Step 4: Construct the new targetlist for the scan node
+			 */
+			{
+				ListCell   *lc = NULL;
+				int			resno = 1;
+				List	   *scanTL = NIL;
+
+				foreach(lc, scanVars)
+				{
+					Var		   *var = (Var *) copyObject(lfirst(lc));
+
+					scanTL = lappend(scanTL, makeTargetEntry((Expr *) var,
+					                                         resno,
+					                                         NULL,
+					                                         false));
+					resno++;
+				}
+				scanPlan->targetlist = scanTL;
+			}
+
+			/**
+			 * There should be no subplans in the scan node anymore.
+			 */
+			Assert(!contain_subplans((Node *) scanPlan->targetlist));
+			Assert(!contain_subplans((Node *) scanPlan->qual));
+		}
+
+
+		/**
+		 * Step 5: Construct result node's targetlist and quals
+		 */
+		MapVarsMutatorContext ctx1;
+
+		ctx1.base.node = ctx->base.node;
+		ctx1.outerTL = samplingScanPlan->targetlist;
+
+		append->plan.targetlist = (List *)MapVarsMutator((Node*)samplingScanPlan->targetlist, &ctx1);
+		List	   *resTL   = (List *) MapVarsMutator((Node *) saveTL, &ctx1);
+		List	   *resQual = (List *) MapVarsMutator((Node *) samplingQual, &ctx1);
+		append->plan.allParam = NULL;
+		append->plan.extParam = NULL;
+
+		/**
+		 * Step 6: Ensure that apply_motion adds a broadcast or a gather motion
+		 * depending on the desired movement.
+		 */
+		if (ctx->movement == MOVEMENT_BROADCAST)
+		{
+			Assert (NULL != ctx->currentPlanFlow);
+			broadcastPlan(&(append->plan), false /* stable */ , false /* rescannable */,
+			              ctx->currentPlanFlow->numsegments /* numsegments */);
+		}
+		else
+		{
+			focusPlan(&(append->plan), false /* stable */ , false /* rescannable */ );
+		}
+
+		/**
+		 * Step 7: Add a material node
+		 */
+		Plan	   *mat = materialize_subplan((PlannerInfo *) ctx->base.node, &(append->plan));
+
+		/**
+		 * Step 8: Fix up the result node on top of the material node
+		 */
+		Result	   *res = make_result((PlannerInfo *) ctx->base.node, resTL, NULL, mat);
+
+		res->plan.qual = resQual;
+		((Plan *) res)->allParam = saveAllParam;
+		((Plan *) res)->extParam = saveExtParam;
+
+		Assert(((Plan *) res)->lefttree && ((Plan *) res)->lefttree->flow);
+		((Plan *) res)->flow = pull_up_Flow((Plan *) res, ((Plan *) res)->lefttree);
+
+		/**
+		 * It is possible that there is an additional level of correlation in the result node.
+		 * we will need to recurse in these structures again.
+		 */
+		if (contain_subplans((Node *) res->plan.targetlist))
+		{
+			res->plan.targetlist = (List *) ParallelizeCorrelatedSubPlanMutator((Node *) res->plan.targetlist, ctx);
+		}
+		if (contain_subplans((Node *) res->plan.qual))
+		{
+			res->plan.qual = (List *) ParallelizeCorrelatedSubPlanMutator((Node *) res->plan.qual, ctx);
+		}
+
+		return (Node *) res;
+	}
+
+	if (IsA(node, SeqScan)
+			||IsA(node, ShareInputScan)
+			||IsA(node, ExternalScan))
 	{
 		Plan	   *scanPlan = (Plan *) node;
 
