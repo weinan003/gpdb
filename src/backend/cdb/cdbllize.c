@@ -398,22 +398,59 @@ ParallelizeCorrelatedSubPlanUpdateFlowMutator(Node *node)
 	return node;
 }
 
+static Oid
+fetch_parent_oid(ParallelizeCorrelatedPlanWalkerContext *ctx,Scan *node)
+{
+	PlannerInfo* root =(PlannerInfo *)ctx->base.node;
+	RangeTblEntry  *rtentry = (RangeTblEntry *)rt_fetch(node->scanrelid, ctx->rtable);
+	PlannerInfo* subPlanInfo = (PlannerInfo *)rt_fetch(ctx->sp->plan_id,root->glob->subroots);
+
+	ListCell *lc;
+	foreach(lc, subPlanInfo->append_rel_list)
+	{
+		AppendRelInfo *apRI = (AppendRelInfo*)lfirst(lc);
+		RangeTblEntry  *rtSub = (RangeTblEntry *)rt_fetch(apRI->child_relid, subPlanInfo->parse->rtable);
+		if(rtSub->relid == rtentry->relid)
+			return apRI->parent_reloid;
+	}
+
+	return InvalidOid;
+}
+
 /**
  * IsAppendUponPartition
- * under Append node all must be PARTITIONED table
+ * recongize parttern: Append -> Scan...Scan
+ * Since UNION ALL can give different filter for scan nodes under to append,
+ * does not pull up motion if query has UNION ALL
  */
 static bool
-IsAppendUponPartition(Node * node)
+IsAppendUponPartition(Node * node, ParallelizeCorrelatedPlanWalkerContext *ctx)
 {
 	if(!IsA(node, Append))
 		return false;
 
 	Append *append = (Append *) node;
+
 	ListCell *lc;
-	//List* firstQual = NIL;
+
+	lc = append->appendplans->head;
+
+	Node *apNode = (Node *)lfirst(lc);
+
+	if(!(IsA(apNode, SeqScan)
+			|| IsA(apNode, ShareInputScan)
+			|| IsA(apNode, ExternalScan)))
+		return false;
+
+	Oid fstParentOid = fetch_parent_oid(ctx, apNode);
+
+	if(InvalidOid == fstParentOid)
+		return false;
+
 	foreach(lc, append->appendplans)
 	{
-		Node *apNode = (Node *)lfirst(lc);
+		apNode = (Node *)lfirst(lc);
+
 		if(IsA(apNode, SeqScan)
 				|| IsA(apNode, ShareInputScan)
 				|| IsA(apNode, ExternalScan))
@@ -429,10 +466,8 @@ IsAppendUponPartition(Node * node)
 				return false;
 
 			/* do not optimize if scan node have different qual */
-			//if(NIL == firstQual)
-			//	firstQual = scanPlan->qual;
-			//else if(!equal(firstQual,scanPlan->qual))
-			//	return false;
+			if(fstParentOid != fetch_parent_oid(ctx, apNode))
+				return false;
 		}
 		else
 			return false;
@@ -492,8 +527,11 @@ ParallelizeCorrelatedSubPlanMutator(Node *node, ParallelizeCorrelatedPlanWalkerC
 		}
 	}
 
-	if(IsAppendUponPartition(node))
+	if(IsAppendUponPartition(node, ctx))
 	{
+		/**
+		 * Step 0: For table inheritance and partitioning, pull up broadcast motion above append node.
+		 */
 		Append      *append = (Append *) node;
 
 		Plan* samplingScanPlan = (Plan *)lfirst(append->appendplans->head);
@@ -583,7 +621,7 @@ ParallelizeCorrelatedSubPlanMutator(Node *node, ParallelizeCorrelatedPlanWalkerC
 
 
 		/**
-		 * Step 5: Construct result node's targetlist and quals
+		 * Step 5: Construct append node's targetlist
 		 */
 		MapVarsMutatorContext ctx1;
 
@@ -617,7 +655,7 @@ ParallelizeCorrelatedSubPlanMutator(Node *node, ParallelizeCorrelatedPlanWalkerC
 		Plan	   *mat = materialize_subplan((PlannerInfo *) ctx->base.node, &(append->plan));
 
 		/**
-		 * Step 8: Fix up the result node on top of the material node
+		 * Step 8: Fix up the result node on top of the material node and set quals
 		 */
 		Result	   *res = make_result((PlannerInfo *) ctx->base.node, resTL, NULL, mat);
 
