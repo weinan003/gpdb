@@ -344,6 +344,8 @@ _copyAppend(const Append *from)
 	 */
 	COPY_NODE_FIELD(appendplans);
 
+	newnode->isInheritance = from->isInheritance;
+
 	return newnode;
 }
 

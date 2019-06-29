@@ -386,6 +386,7 @@ typedef struct Append
 {
 	Plan		plan;
 	List	   *appendplans;
+	bool		isInheritance; /* indicate under nodes are expended by inherited */
 } Append;
 
 /* ----------------

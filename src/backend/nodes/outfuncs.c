@@ -483,6 +483,7 @@ _outAppend(StringInfo str, const Append *node)
 	_outPlanInfo(str, (const Plan *) node);
 
 	WRITE_NODE_FIELD(appendplans);
+	WRITE_BOOL_FIELD(isInheritance);
 }
 
 static void

@@ -398,25 +398,6 @@ ParallelizeCorrelatedSubPlanUpdateFlowMutator(Node *node)
 	return node;
 }
 
-static Oid
-fetch_parent_oid(ParallelizeCorrelatedPlanWalkerContext *ctx,Scan *node)
-{
-	PlannerInfo* root =(PlannerInfo *)ctx->base.node;
-	RangeTblEntry  *rtentry = (RangeTblEntry *)rt_fetch(node->scanrelid, ctx->rtable);
-	PlannerInfo* subPlanInfo = (PlannerInfo *)rt_fetch(ctx->sp->plan_id,root->glob->subroots);
-
-	ListCell *lc;
-	foreach(lc, subPlanInfo->append_rel_list)
-	{
-		AppendRelInfo *apRI = (AppendRelInfo*)lfirst(lc);
-		RangeTblEntry  *rtSub = (RangeTblEntry *)rt_fetch(apRI->child_relid, subPlanInfo->parse->rtable);
-		if(rtSub->relid == rtentry->relid)
-			return apRI->parent_reloid;
-	}
-
-	return InvalidOid;
-}
-
 /**
  * IsAppendUponPartition
  * recongize parttern: Append -> Scan...Scan
@@ -431,45 +412,28 @@ IsAppendUponPartition(Node * node, ParallelizeCorrelatedPlanWalkerContext *ctx)
 
 	Append *append = (Append *) node;
 
+	if(!append->isInheritance
+	   || !append->plan.flow
+	   || append->plan.flow->flotype == FLOW_UNDEFINED)
+		return false;
+
 	ListCell *lc;
-
-	lc = append->appendplans->head;
-
-	Node *apNode = (Node *)lfirst(lc);
-
-	if(!(IsA(apNode, SeqScan)
-			|| IsA(apNode, ShareInputScan)
-			|| IsA(apNode, ExternalScan)))
-		return false;
-
-	Oid fstParentOid = fetch_parent_oid(ctx, apNode);
-
-	if(InvalidOid == fstParentOid)
-		return false;
 
 	foreach(lc, append->appendplans)
 	{
-		apNode = (Node *)lfirst(lc);
+		Node *apNode = (Node *)lfirst(lc);
+		if(!(IsA(apNode, SeqScan)
+			 || IsA(apNode, ShareInputScan)
+			 || IsA(apNode, ExternalScan)))
+			return false;
 
-		if(IsA(apNode, SeqScan)
-				|| IsA(apNode, ShareInputScan)
-				|| IsA(apNode, ExternalScan))
-		{
-			Plan *scanPlan = (Plan*)apNode;
+		Plan *scanPlan= (Plan *)apNode;
+		/* do not optimize if scan a catalog table */
+		if (scanPlan->flow && (scanPlan->flow->locustype == CdbLocusType_Entry))
+			return false;
 
-			/* do not optimize if scan a catalog table */
-			if (scanPlan->flow && (scanPlan->flow->locustype == CdbLocusType_Entry))
-				return false;
-
-			/* do not optimize if scan does not below to partitioned form */
-			if(scanPlan->flow->flotype != FLOW_PARTITIONED)
-				return false;
-
-			/* do not optimize if scan node have different qual */
-			if(fstParentOid != fetch_parent_oid(ctx, apNode))
-				return false;
-		}
-		else
+		/* do not optimize if scan does not below to partitioned form */
+		if(scanPlan->flow->flotype != FLOW_PARTITIONED)
 			return false;
 	}
 

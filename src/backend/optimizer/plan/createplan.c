@@ -877,6 +877,7 @@ create_append_plan(PlannerInfo *root, AppendPath *best_path)
 	 */
 
 	plan = make_append(subplans, tlist);
+	((Append *)plan)->isInheritance = true;
 
 	return (Plan *) plan;
 }
