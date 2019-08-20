@@ -34,6 +34,10 @@ static void assert_guc(struct config_generic *conf)
 				unsync_guc_num,
 				sizeof(char *),
 				guc_array_compare);
+
+		if ( res == NULL)
+			printf("GUC: '%s' does not exist in both list.\n", conf->name);
+
 		assert_true(res);
 	}
 }

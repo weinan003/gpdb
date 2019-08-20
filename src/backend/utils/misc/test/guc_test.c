@@ -52,6 +52,10 @@ static void assert_guc(struct config_generic *conf)
 				unsync_guc_num,
 				sizeof(char *),
 				guc_array_compare);
+
+		if ( res == NULL)
+			printf("GUC: '%s' does not exist in both list.\n", conf->name);
+
 		assert_true(res);
 	}
 }
@@ -117,13 +121,16 @@ test_enum_guc_coverage(void **state)
 static void
 test_guc_name_list_mutual_exclusion(void **state)
 {
-	for(int i = 0; i < sync_guc_num; i++)
+	for (int i = 0; i < sync_guc_num; i++)
 	{
 		char *res = (char *) bsearch((void *) &(sync_guc_names_array[i]),
 				(void *) unsync_guc_names_array,
 				unsync_guc_num,
 				sizeof(char *),
 				guc_array_compare);
+
+		if ( res != NULL)
+			printf("GUC: '%s' exist in both list.\n", sync_guc_names_array[i]);
 
 		assert_true(res == NULL);
 	}
