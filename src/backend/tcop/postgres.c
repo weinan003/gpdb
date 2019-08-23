@@ -121,13 +121,6 @@ int			max_stack_depth = 100;
 int			PostAuthDelay = 0;
 
 /*
- * GUCs passed from QD will firstly be cached on QE
- * if QE is not in a transaction.
- */
-char		   *cachedGUC = NULL;
-int			cachedGUCLen = 0;
-
-/*
  * Hook for extensions, to get notified when query cancel or DIE signal is
  * received. This allows the extension to stop whatever it's doing as
  * quickly as possible. Normally, you would sprinkle your code with
@@ -5938,22 +5931,9 @@ apply_guc_from_qd(const char * serializedGUC, int serializedGUClen)
 	char		   *gucToApply = NULL;
 	int			gucToApplyLen = 0;
 
-	/* if not in a transaction, do it later */
-	if (!IsTransactionOrTransactionBlock())
-	{
-		/* for later apply */
-		if (serializedGUClen != 0)
-		{
-			cachedGUC = palloc(serializedGUClen * sizeof(char));
-			memcpy(cachedGUC, serializedGUC, serializedGUClen);
-			cachedGUCLen = serializedGUClen;
-		}
-		return;
-	}
-
 	/* do the real apply GUC work when we are in a transaction */
 	/* return if there is no GUC to sync. */
-	if (serializedGUClen == 0 && cachedGUCLen == 0)
+	if (serializedGUClen == 0)
 		return;
 
 	/* new serializedGUC */
@@ -5961,11 +5941,6 @@ apply_guc_from_qd(const char * serializedGUC, int serializedGUClen)
 	{
 		gucToApply = (char *)serializedGUC;
 		gucToApplyLen = serializedGUClen;
-	}
-	else if (cachedGUCLen != 0 && cachedGUC != NULL)
-	{
-		gucToApply = cachedGUC;
-		gucToApplyLen = cachedGUCLen;
 	}
 	if (gucToApplyLen != 0 && gucToApply != NULL)
 	{
@@ -5994,10 +5969,5 @@ apply_guc_from_qd(const char * serializedGUC, int serializedGUClen)
 							GUC_ACTION_SET, true, 0);
 		}
 		is_guc_sync = false;
-		/* clear cache when apply succeeded */
-		cachedGUCLen = 0;
-		if (cachedGUC)
-			pfree(cachedGUC);
-		cachedGUC = NULL;
 	}
 }
