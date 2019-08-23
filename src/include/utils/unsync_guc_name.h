@@ -479,3 +479,4 @@
 		"xmloption",
 		"zero_damaged_pages",
 		"client_encoding",
+		"log_autostats",

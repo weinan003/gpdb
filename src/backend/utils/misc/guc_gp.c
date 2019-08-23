@@ -1613,7 +1613,7 @@ struct config_bool ConfigureNamesBool_gp[] =
 	{
 		{"log_autostats", PGC_SUSET, LOGGING_WHAT,
 			gettext_noop("Logs details of auto-stats issued ANALYZEs."),
-			NULL, GUC_GPDB_NEED_SYNC
+			NULL
 		},
 		&log_autostats,
 		true,

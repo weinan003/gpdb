@@ -135,7 +135,6 @@
 		"gp_recursive_cte_prototype",
 		"ignore_system_indexes",
 		"lock_timeout",
-		"log_autostats",
 		"pljava_debug",
 		"writable_external_table_bufsize",
 		"readable_external_table_timeout",
