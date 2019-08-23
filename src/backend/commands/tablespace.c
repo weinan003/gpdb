@@ -1522,7 +1522,7 @@ check_temp_tablespaces(char **newval, void **extra, GucSource source)
 	 * cannot verify the individual names.  Must accept the list on faith.
 	 * Fortunately, there's then also no need to pass the data to fd.c.
 	 */
-	if (IsTransactionState())
+	if (IsTransactionState() && !is_guc_sync)
 	{
 		temp_tablespaces_extra *myextra;
 		Oid		   *tblSpcs;

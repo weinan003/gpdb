@@ -4750,6 +4750,7 @@ void gpdb_assign_sync_flag(struct config_generic **guc_variables, int size, bool
 		qsort((void *) unsync_guc_names_array, unsync_guc_num,
 		      sizeof(char *), guc_array_compare);
 
+		is_guc_sync = false;
 		init = true;
 	}
 

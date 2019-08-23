@@ -268,6 +268,85 @@ buildGangDefinition(List *segments, SegmentType segmentType)
 }
 
 /*
+ * Add one GUC to the option string.
+ */
+static void
+addOneOption(StringInfo string, struct config_generic *guc)
+{
+	Assert(guc && (guc->flags & GUC_GPDB_NEED_SYNC));
+	switch (guc->vartype)
+	{
+		case PGC_BOOL:
+		{
+			struct config_bool *bguc = (struct config_bool *) guc;
+
+			appendStringInfo(string, " -c %s=%s", guc->name, *(bguc->variable) ? "true" : "false");
+			break;
+		}
+		case PGC_INT:
+		{
+			struct config_int *iguc = (struct config_int *) guc;
+
+			appendStringInfo(string, " -c %s=%d", guc->name, *iguc->variable);
+			break;
+		}
+		case PGC_REAL:
+		{
+			struct config_real *rguc = (struct config_real *) guc;
+
+			appendStringInfo(string, " -c %s=%f", guc->name, *rguc->variable);
+			break;
+		}
+		case PGC_STRING:
+		{
+			struct config_string *sguc = (struct config_string *) guc;
+			const char *str = *sguc->variable;
+			int			i;
+
+			appendStringInfo(string, " -c %s=", guc->name);
+
+			/*
+			 * All whitespace characters must be escaped. See
+			 * pg_split_opts() in the backend.
+			 */
+			for (i = 0; str[i] != '\0'; i++)
+			{
+				if (isspace((unsigned char) str[i]))
+					appendStringInfoChar(string, '\\');
+
+				appendStringInfoChar(string, str[i]);
+			}
+			break;
+		}
+		case PGC_ENUM:
+		{
+			struct config_enum *eguc = (struct config_enum *) guc;
+			int			value = *eguc->variable;
+			const char *str = config_enum_lookup_by_value(eguc, value);
+			int			i;
+
+			appendStringInfo(string, " -c %s=", guc->name);
+
+			/*
+			 * All whitespace characters must be escaped. See
+			 * pg_split_opts() in the backend. (Not sure if an enum value
+			 * can have whitespace, but let's be prepared.)
+			 */
+			for (i = 0; str[i] != '\0'; i++)
+			{
+				if (isspace((unsigned char) str[i]))
+					appendStringInfoChar(string, '\\');
+
+				appendStringInfoChar(string, str[i]);
+			}
+			break;
+		}
+		default:
+			Insist(false);
+	}
+}
+
+/*
  * Add GUCs to option string.
  */
 char *
@@ -283,6 +362,22 @@ makeOptions(void)
 	qdinfo = cdbcomponent_getComponentInfo(MASTER_CONTENT_ID); 
 	appendStringInfo(&string, " -c gp_qd_hostname=%s", qdinfo->config->hostip);
 	appendStringInfo(&string, " -c gp_qd_port=%d", qdinfo->config->port);
+
+	ListCell *lc;
+	foreach(lc,guc_list_need_sync_global)
+	{
+		GUCEntry *entry = (GUCEntry *) lfirst(lc);
+		struct config_generic *guc = find_option(entry->name, false, 0);
+
+		/*
+		 * Since we could not startxact in exec_mpp_dtx_protocol_command()
+		 * to set GUC, but some assign functions of GUC need transaction started.
+		 * So if it is dtx comamnd, then we only sync GUC with GUC_GPDB_DTX flags
+		 *
+		 */
+		if (guc != NULL)
+			addOneOption(&string, guc);
+	}
 
 	return string.data;
 }

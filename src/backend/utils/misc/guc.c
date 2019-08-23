@@ -153,6 +153,7 @@ char	   *GUC_check_errmsg_string;
 char	   *GUC_check_errdetail_string;
 char	   *GUC_check_errhint_string;
 
+bool        is_guc_sync;
 
 static void set_config_sourcefile(const char *name, char *sourcefile,
 					  int sourceline);
@@ -7198,6 +7199,7 @@ ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel)
 									 action,
 									 true,
 									 0);
+			DispatchSetPGVariable(stmt->name, stmt->args, stmt->is_local);
 			break;
 		case VAR_SET_MULTI:
 

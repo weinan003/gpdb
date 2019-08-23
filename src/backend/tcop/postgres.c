@@ -5975,11 +5975,15 @@ apply_guc_from_qd(const char * serializedGUC, int serializedGUClen)
 
 		guc_list = (List *) readNodeFromBinaryString(gucToApply, gucToApplyLen);
 		Assert(IsA(guc_list, List));
+		is_guc_sync = true;
 		foreach (lc, guc_list)
 		{
 			guc = (GUCNode *) lfirst(lc);
 			if (!guc || !IsA(guc, GUCNode))
+			{
+				is_guc_sync = false;
 				elog(ERROR, "MPPEXEC: receive invalid guc with node tag: %d", guc->type);
+			}
 			/*
 			 * Whether to change GUC values and their life cycles are
 			 * determined at QD side. As a result, we just set
@@ -5989,6 +5993,7 @@ apply_guc_from_qd(const char * serializedGUC, int serializedGUClen)
 							guc->context, guc->source,
 							GUC_ACTION_SET, true, 0);
 		}
+		is_guc_sync = false;
 		/* clear cache when apply succeeded */
 		cachedGUCLen = 0;
 		if (cachedGUC)

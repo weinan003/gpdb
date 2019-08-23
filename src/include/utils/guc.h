@@ -380,6 +380,7 @@ extern bool gp_perfmon_print_packet_info;
 
 extern bool gp_enable_relsize_collection;
 
+extern bool is_guc_sync;
 /* Debug DTM Action */
 typedef enum
 {
