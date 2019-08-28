@@ -1513,6 +1513,36 @@ CheckDebugDtmActionSqlCommandTag(const char *sqlCommandTag)
 	return result;
 }
 
+static void
+restore_guc_to_QE(void )
+{
+	Assert(Gp_role == GP_ROLE_DISPATCH && gp_guc_restore_list);
+	ListCell *lc;
+
+	start_xact_command();
+
+	foreach(lc, gp_guc_restore_list)
+	{
+		struct config_generic* gconfig = (struct config_generic *)lfirst(lc);
+		PG_TRY();
+		{
+			DispatchSyncPGVariable(gconfig);
+		}
+		PG_CATCH();
+		{
+			/* if some guc can not restore successful
+			 * we can not keep alive gang anymore.
+			 */
+			DisconnectAndDestroyAllGangs(false);
+		}
+		PG_END_TRY();
+	}
+
+	finish_xact_command();
+	list_free(gp_guc_restore_list);
+	gp_guc_restore_list = NIL;
+}
+
 /*
  * exec_simple_query
  *
@@ -5043,7 +5073,13 @@ PostgresMain(int argc, char *argv[],
 					else if (IsFaultHandler)
 						HandleFaultMessage(query_string);
 					else
+					{
+						/* last txn abort, try to synchronize guc to cached QE */
+						if(Gp_role == GP_ROLE_DISPATCH && gp_guc_restore_list)
+							restore_guc_to_QE();
+
 						exec_simple_query(query_string);
+					}
 
 					send_ready_for_query = true;
 				}
