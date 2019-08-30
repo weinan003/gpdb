@@ -107,25 +107,16 @@ DROP TABLE test_serializable;
 
 
 -- Test single query guc rollback
-CREATE FUNCTION t() RETURNS text
-AS $$
-DECLARE
-c TEXT;
-BEGIN
-EXECUTE 'show datestyle;' INTO c;
-RETURN c;
-END;
-$$
-language plpgsql;
-
 set allow_segment_DML to on;
 
 set datestyle='german';
 select gp_inject_fault('set_variable_fault', 'error', dbid)
 from gp_segment_configuration where content=0 and role='p';
 set datestyle='sql, mdy';
-select gp_inject_fault('all', 'reset', dbid) from gp_segment_configuration;
-select t() from gp_dist_random('gp_id');
+-- after guc set failed, before next query handle, qd will sync guc
+-- to qe. using `select 1` trigger guc reset.
+select 1;
+select current_setting('datestyle') from gp_dist_random('gp_id');
 
+select gp_inject_fault('all', 'reset', dbid) from gp_segment_configuration;
 set allow_segment_DML to off;
-DROP FUNCTION t();
