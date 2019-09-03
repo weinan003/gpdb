@@ -5046,6 +5046,11 @@ PostgresMain(int argc, char *argv[],
 		if (ignore_till_sync && firstchar != EOF)
 			continue;
 
+		/* last txn abort, try to synchronize guc to cached QE */
+		if(Gp_role == GP_ROLE_DISPATCH && gp_guc_restore_list)
+			restore_guc_to_QE();
+
+
 		ereport((Debug_print_full_dtm ? LOG : DEBUG5),
 				(errmsg_internal("First char: '%c'; gp_role = '%s'.", firstchar, role_to_string(Gp_role))));
 
@@ -5073,13 +5078,7 @@ PostgresMain(int argc, char *argv[],
 					else if (IsFaultHandler)
 						HandleFaultMessage(query_string);
 					else
-					{
-						/* last txn abort, try to synchronize guc to cached QE */
-						if(Gp_role == GP_ROLE_DISPATCH && gp_guc_restore_list)
-							restore_guc_to_QE();
-
 						exec_simple_query(query_string);
-					}
 
 					send_ready_for_query = true;
 				}
