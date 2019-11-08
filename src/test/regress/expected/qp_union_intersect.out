@@ -1776,24 +1776,22 @@ select a, b, array_dims(array_agg(x)) from mergeappend_test r group by a, b
 union all
 select null, null, array_dims(array_agg(x)) from mergeappend_test r
 order by 1,2;
-                         QUERY PLAN                         
-------------------------------------------------------------
- Merge Append
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Sort
    Sort Key: r.a, r.b
-   ->  Gather Motion 3:1  (slice1; segments: 3)
-         Merge Key: r.a, r.b
-         ->  GroupAggregate
-               Group Key: r.a, r.b
-               ->  Sort
-                     Sort Key: r.a, r.b
-                     ->  Seq Scan on mergeappend_test r
-   ->  Sort
-         Sort Key: (NULL::integer), (NULL::integer)
+   ->  Append
+         ->  Gather Motion 3:1  (slice1; segments: 3)
+               ->  GroupAggregate
+                     Group Key: r.a, r.b
+                     ->  Sort
+                           Sort Key: r.a, r.b
+                           ->  Seq Scan on mergeappend_test r
          ->  Aggregate
                ->  Gather Motion 3:1  (slice2; segments: 3)
                      ->  Seq Scan on mergeappend_test r_1
  Optimizer: Postgres query optimizer
-(15 rows)
+(13 rows)
 
 -- This used to trip an assertion in MotionStateFinderWalker(), when we were
 -- missing support for MergeAppend in planstate_walk_kids().
@@ -1818,30 +1816,68 @@ explain analyze select a, b, array_dims(array_agg(x)) from mergeappend_test r gr
 union all
 select null, null, array_dims(array_agg(x)) FROM mergeappend_test r
 order by 1,2;
-                                                                 QUERY PLAN                                                                  
----------------------------------------------------------------------------------------------------------------------------------------------
- Merge Append  (cost=59.71..66.08 rows=37 width=40) (actual time=0.958..0.965 rows=4 loops=2)
+                                                                  QUERY PLAN                                                                   
+-----------------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=56.55..56.65 rows=37 width=40) (actual time=3.526..3.533 rows=7 loops=1)
    Sort Key: r.a, r.b
-   ->  Gather Motion 3:1  (slice1; segments: 3)  (cost=30.41..37.03 rows=36 width=40) (actual time=0.550..0.554 rows=3 loops=2)
-         Merge Key: r.a, r.b
-         ->  GroupAggregate  (cost=30.41..35.95 rows=12 width=40) (actual time=0.234..0.317 rows=2 loops=2)
-               Group Key: r.a, r.b
-               ->  Sort  (cost=30.41..31.66 rows=167 width=12) (actual time=0.181..0.205 rows=150 loops=2)
-                     Sort Key: r.a, r.b
-                     Sort Method:  quicksort  Memory: 115kB
-                     ->  Seq Scan on mergeappend_test r  (cost=0.00..8.00 rows=167 width=12) (actual time=0.005..0.032 rows=150 loops=2)
-   ->  Sort  (cost=29.29..29.29 rows=1 width=40) (actual time=0.407..0.409 rows=0 loops=2)
-         Sort Key: (NULL::integer), (NULL::integer)
-         Sort Method:  quicksort  Memory: 33kB
-         ->  Aggregate  (cost=29.25..29.27 rows=1 width=40) (actual time=0.395..0.395 rows=0 loops=2)
-               ->  Gather Motion 3:1  (slice2; segments: 3)  (cost=0.00..28.00 rows=500 width=4) (actual time=0.034..0.319 rows=250 loops=2)
-                     ->  Seq Scan on mergeappend_test r_1  (cost=0.00..8.00 rows=167 width=4) (actual time=0.008..0.041 rows=150 loops=2)
- Planning time: 0.793 ms
-   (slice0)    Executor memory: 380K bytes.  Work_mem: 33K bytes max.
-   (slice1)    Executor memory: 121K bytes avg x 3 workers, 140K bytes max (seg0).  Work_mem: 49K bytes max.
+   Sort Method:  quicksort  Memory: 33kB
+   ->  Append  (cost=30.41..55.59 rows=37 width=40) (actual time=1.714..3.461 rows=7 loops=1)
+         ->  Gather Motion 3:1  (slice1; segments: 3)  (cost=30.41..37.03 rows=36 width=40) (actual time=1.708..2.766 rows=6 loops=1)
+               ->  GroupAggregate  (cost=30.41..35.95 rows=12 width=40) (actual time=1.174..1.723 rows=4 loops=1)
+                     Group Key: r.a, r.b
+                     ->  Sort  (cost=30.41..31.66 rows=167 width=12) (actual time=0.911..1.060 rows=301 loops=1)
+                           Sort Key: r.a, r.b
+                           Sort Method:  quicksort  Memory: 115kB
+                           ->  Seq Scan on mergeappend_test r  (cost=0.00..8.00 rows=167 width=12) (actual time=0.072..0.191 rows=301 loops=1)
+         ->  Aggregate  (cost=19.25..19.27 rows=1 width=40) (actual time=0.687..0.687 rows=1 loops=1)
+               ->  Gather Motion 3:1  (slice2; segments: 3)  (cost=0.00..18.00 rows=500 width=4) (actual time=0.179..0.420 rows=500 loops=1)
+                     ->  Seq Scan on mergeappend_test r_1  (cost=0.00..8.00 rows=167 width=4) (actual time=0.066..0.319 rows=301 loops=1)
+ Planning time: 3.419 ms
+   (slice0)    Executor memory: 248K bytes.  Work_mem: 33K bytes max.
+   (slice1)    Executor memory: 113K bytes avg x 3 workers, 124K bytes max (seg0).  Work_mem: 49K bytes max.
    (slice2)    Executor memory: 42K bytes avg x 3 workers, 42K bytes max (seg0).
  Memory used:  128000kB
  Optimizer: Postgres query optimizer
- Execution time: 2.496 ms
-(23 rows)
+ Execution time: 5.006 ms
+(21 rows)
+
+CREATE TABLE t1(c1 int, c2 int, c3 int);
+CREATE TABLE t2(c1 int, c2 int, c3 int);
+INSERT INTO t1 SELECT i, i ,i + 1 FROM generate_series(1,10) i;
+INSERT INTO t2 SELECT i, i ,i + 1 FROM generate_series(1,10) i;
+SET enable_hashagg = off;
+with tcte(c1, c2, c3) as (
+	SELECT c1, sum(c2) as c2, c3 FROM t1 WHERE c3 > 0 GROUP BY c1, c3
+	UNION ALL
+	SELECT c1, sum(c2) as c2, c3 FROM t2 WHERE c3 < 0 GROUP BY c1, c3
+)
+SELECT * FROM tcte WHERE c3 = 1;
+ c1 | c2 | c3 
+----+----+----
+(0 rows)
+
+explain with tcte(c1, c2, c3) as (
+	SELECT c1, sum(c2) as c2, c3 FROM t1 WHERE c3 > 0 GROUP BY c1, c3
+	UNION ALL
+	SELECT c1, sum(c2) as c2, c3 FROM t2 WHERE c3 < 0 GROUP BY c1, c3
+)
+SELECT * FROM tcte WHERE c3 = 1;
+                                    QUERY PLAN                                     
+-----------------------------------------------------------------------------------
+ Append  (cost=3.16..3.23 rows=2 width=16)
+   ->  Gather Motion 3:1  (slice1; segments: 3)  (cost=3.16..3.21 rows=1 width=16)
+         ->  GroupAggregate  (cost=3.16..3.18 rows=1 width=16)
+               Group Key: t1.c1, t1.c3
+               ->  Sort  (cost=3.16..3.16 rows=1 width=12)
+                     Sort Key: t1.c1
+                     ->  Seq Scan on t1  (cost=0.00..3.15 rows=1 width=12)
+                           Filter: ((c3 > 0) AND (c3 = 1))
+   ->  GroupAggregate  (cost=0.01..0.03 rows=1 width=16)
+         Group Key: c1, c3
+         ->  Sort  (cost=0.01..0.02 rows=0 width=12)
+               Sort Key: c1
+               ->  Result  (cost=0.00..0.00 rows=0 width=12)
+                     One-Time Filter: false
+ Optimizer: Postgres query optimizer
+(15 rows)
 

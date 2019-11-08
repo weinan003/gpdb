@@ -1578,14 +1578,13 @@ ORDER BY thousand, tenthous;
 -------------------------------------------------------------------------------
  Gather Motion 3:1  (slice1; segments: 3)
    Merge Key: tenk1.thousand, tenk1.tenthous
-   ->  Merge Append
+   ->  Sort
          Sort Key: tenk1.thousand, tenk1.tenthous
-         ->  Index Only Scan using tenk1_thous_tenthous on tenk1
-         ->  Sort
-               Sort Key: tenk1_1.thousand, ((random())::integer)
+         ->  Append
+               ->  Index Only Scan using tenk1_thous_tenthous on tenk1
                ->  Index Only Scan using tenk1_thous_tenthous on tenk1 tenk1_1
  Optimizer: Postgres query optimizer
-(9 rows)
+(8 rows)
 
 -- Check min/max aggregate optimization
 -- GPDB: simple union all pull up is disabled in pull_up_subqueries(), so the

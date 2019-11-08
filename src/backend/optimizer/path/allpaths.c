@@ -1329,6 +1329,7 @@ set_append_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 	List	   *all_child_pathkeys = NIL;
 	List	   *all_child_outers = NIL;
 	ListCell   *l;
+	bool        withoutSubquery = true;
 
 	/*
 	 * Generate access paths for each member relation, and remember the
@@ -1372,6 +1373,8 @@ set_append_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 		 */
 		if (IS_DUMMY_REL(childrel))
 			continue;
+
+		withoutSubquery = withoutSubquery && (childRTE->rtekind != RTE_SUBQUERY);
 
 		/*
 		 * Child is live, so add it to the live_childrels list for use below.
@@ -1507,8 +1510,15 @@ set_append_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 	/*
 	 * Also build unparameterized MergeAppend paths based on the collected
 	 * list of child pathkeys.
+	 *
+	 * In gpdb, we should reject subselect set mergeappend node upon. The
+	 * reason is that subselect grab its child node pathkeys into itself's 
+	 * pathkey list, which is different with upstream.
+	 *
+	 * In some cases, subselect's RTIndex is different, so pathkey may faile
+	 * mapping pathkey to sort column in `prepare_sort_from_pathkeys` func.
 	 */
-	if (subpaths_valid)
+	if (subpaths_valid && withoutSubquery)
 		generate_mergeappend_paths(root, rel, live_childrels,
 								   all_child_pathkeys);
 
