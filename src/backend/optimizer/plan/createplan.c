@@ -1739,6 +1739,26 @@ create_agg_plan(PlannerInfo *root, AggPath *best_path)
 
 	plan->plan.flow = copyObject(subplan->flow);
 
+	int i, j = 0;
+	plan->numDisCols = best_path->dqas_num;
+	plan->distColIdx = palloc0(sizeof(Index) * plan->numDisCols);
+	while ((i = bms_first_member(best_path->dqas_ref_bm)) >= 0)
+	{
+		TargetEntry *te = get_sortgroupref_tle((Index)i, subplan->targetlist);
+		plan->distColIdx[j] = te->resno;
+		j++;
+	}
+	plan->mappinglen = sizeof(int ) * list_length(tlist);
+	plan->shadow_mapping = palloc0( plan->mappinglen);
+	if(best_path->shadow_mapping)
+	{
+		plan->shadow_elimit = true;
+		memcpy(plan->shadow_mapping, best_path->shadow_mapping, plan->mappinglen);
+	}
+	else
+		plan->shadow_elimit = false;
+
+
 	return plan;
 }
 

@@ -259,6 +259,8 @@ static TupleTableSlot *project_aggregates(AggState *aggstate);
 static Bitmapset *find_unaggregated_cols(AggState *aggstate);
 static bool find_unaggregated_cols_walker(Node *node, Bitmapset **colnos);
 static TupleTableSlot *agg_retrieve_direct(AggState *aggstate);
+static TupleTableSlot *split_ordered_agg_retrieve_direct(AggState  *node);
+static TupleTableSlot *split_ordered_agg_shadow_elimit(AggState *node);
 static void agg_fill_hash_table(AggState *aggstate);
 static TupleTableSlot *agg_retrieve_hash_table(AggState *aggstate);
 static void ExecAggExplainEnd(PlanState *planstate, struct StringInfoData *buf);
@@ -1756,6 +1758,12 @@ ExecAgg(AggState *node)
 					agg_fill_hash_table(node);
 				result = agg_retrieve_hash_table(node);
 				break;
+			case AGG_SPLITORDERED:
+				if (((Agg *)(node->ss.ps.plan))->shadow_elimit)
+					result = split_ordered_agg_shadow_elimit(node);
+				else
+					result = split_ordered_agg_retrieve_direct(node);
+				break;
 			default:
 				result = agg_retrieve_direct(node);
 				break;
@@ -1766,6 +1774,93 @@ ExecAgg(AggState *node)
 	}
 
 	return NULL;
+}
+
+static TupleTableSlot *
+split_ordered_agg_shadow_elimit(AggState *node)
+{
+	ExprContext *econtext;
+	TupleTableSlot *result;
+	SplitAggInfo *s_agg_info_p = &node->s_agg_info;
+	s_agg_info_p->outerslot = fetch_input_tuple(node);
+	econtext = node->ss.ps.ps_ExprContext;
+
+	if (TupIsNull(s_agg_info_p->outerslot))
+	{
+		node->agg_done = TRUE;
+		return NULL;
+	}
+
+	slot_getallattrs(s_agg_info_p->outerslot);
+
+	Datum *values = slot_get_values(s_agg_info_p->outerslot);
+	bool  *isnulls = slot_get_isnull(s_agg_info_p->outerslot);
+	ListCell *lc;
+	int idx, targetIdx;
+	foreach(lc, node->idxLst)
+	{
+		idx = lfirst_int(lc);
+		Agg *agg = (Agg *)node->ss.ps.plan;
+		targetIdx = agg->shadow_mapping[idx];
+		values[targetIdx] = values[idx];
+		isnulls[targetIdx] = false;
+	}
+
+	econtext->ecxt_outertuple = s_agg_info_p->outerslot;
+	ResetExprContext(econtext);
+
+	result = project_aggregates(node);
+	return result;
+}
+
+static TupleTableSlot *
+split_ordered_agg_retrieve_direct(AggState *node)
+{
+	ExprContext *econtext;
+	SplitAggInfo *s_agg_info_p = &node->s_agg_info;
+	TupleTableSlot *result;
+	econtext = node->ss.ps.ps_ExprContext;
+	Agg *plan = (Agg *)node->ss.ps.plan;
+
+	if (s_agg_info_p->idx == 0)
+	{
+		s_agg_info_p->outerslot = fetch_input_tuple(node);
+
+		if (TupIsNull(s_agg_info_p->outerslot))
+		{
+			node->agg_done = TRUE;
+			return NULL;
+		}
+
+		/* translate to virtual tuple */
+		slot_getallattrs(s_agg_info_p->outerslot);
+
+		/* store original tupleslot isnull array */
+		memcpy(node->isnull_orig, s_agg_info_p->outerslot->PRIVATE_tts_isnull,
+			   s_agg_info_p->outerslot->PRIVATE_tts_nvalid * sizeof(bool));
+	}
+
+	/* reset isnull */
+	bool *isnull = slot_get_isnull(s_agg_info_p->outerslot);
+	memcpy(isnull, node->isnull_orig, s_agg_info_p->outerslot->PRIVATE_tts_nvalid);
+
+	/* populate isnull if the column belone to other distinct and is not a group by */
+	for (Index idx = 0; idx < plan->numDisCols; idx++)
+	{
+		if (!(plan->distColIdx[idx] == plan->distColIdx[s_agg_info_p->idx]
+			  || bms_is_member(plan->distColIdx[s_agg_info_p->idx],
+							   node->grpbySet)))
+			isnull[plan->distColIdx[idx] - 1] = true;
+	}
+
+	s_agg_info_p->idx = (s_agg_info_p->idx + 1) % plan->numDisCols;
+
+	econtext->ecxt_outertuple = s_agg_info_p->outerslot;
+	ResetExprContext(econtext);
+
+	result = project_aggregates(node);
+
+	return result;
 }
 
 /*
@@ -2892,6 +2987,28 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 		ReleaseSysCache(aggTuple);
 	}
 
+	if (node->aggstrategy == AGG_SPLITORDERED)
+	{
+		if(node->shadow_elimit)
+		{
+			int sz = list_length(node->plan.targetlist);
+
+			for(int i = 0; i < sz; i++)
+			{
+				if(node->shadow_mapping[i])
+					aggstate->idxLst = lappend_int(aggstate->idxLst, i);
+			}
+		}
+		else
+		{
+			for (int keyno = 0; keyno < node->numCols; keyno++)
+			{
+				aggstate->grpbySet = bms_add_member(aggstate->grpbySet, node->grpColIdx[keyno]);
+			}
+			aggstate->isnull_orig = (bool *) palloc0(sizeof(bool) * list_length(outerPlan(node)->targetlist));
+		}
+	}
+
 	/*
 	 * Update numaggs to match the number of unique aggregates found. Also set
 	 * numstates to the number of unique aggregate states found.
@@ -3685,6 +3802,19 @@ ExecEagerFreeAgg(AggState *node)
 		{
 			ReleaseTupleDesc(node->hashslot->tts_tupleDescriptor);
 			node->hashslot->tts_tupleDescriptor = NULL;
+		}
+	}
+
+	if (((Agg *)node->ss.ps.plan)->aggstrategy == AGG_SPLITORDERED)
+	{
+		if(((Agg *)node->ss.ps.plan)->shadow_elimit)
+		{
+			list_free(node->idxLst);
+		}
+		else
+		{
+			bms_free(node->grpbySet);
+			pfree(node->isnull_orig);
 		}
 	}
 

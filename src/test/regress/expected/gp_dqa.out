@@ -103,34 +103,42 @@ select count(distinct d), count(distinct dt) from dqa_t1;
 (1 row)
 
 explain (costs off) select count(distinct d), count(distinct dt) from dqa_t1;
-                   QUERY PLAN                   
-------------------------------------------------
- Aggregate
-   ->  Gather Motion 3:1  (slice1; segments: 3)
-         ->  Seq Scan on dqa_t1
+                               QUERY PLAN                               
+------------------------------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 3:1  (slice2; segments: 3)
+         ->  Partial Aggregate
+               ->  Streaming HashAggregate
+                     Group Key: d, dt
+                     ->  Redistribute Motion 3:3  (slice1; segments: 3)
+                           Hash Key: d, dt
+                           ->  Split Ordered Aggregate
+                                 Split by Col: d, dt
+                                 ->  Seq Scan on dqa_t1
  Optimizer: Postgres query optimizer
-(4 rows)
+(11 rows)
 
--- start_ignore
--- GPDB_96_MERGE_FIXME: this used to get a smarter multi-dqa agg plan
--- end_ignore
 select count(distinct d), count(distinct c), count(distinct dt) from dqa_t1;
  count | count | count 
 -------+-------+-------
     23 |    10 |    34
 (1 row)
 
--- start_ignore
--- GPDB_96_MERGE_FIXME: this used to get a smarter multi-dqa agg plan
--- end_ignore
 explain (costs off) select count(distinct d), count(distinct c), count(distinct dt) from dqa_t1;
-                   QUERY PLAN                   
-------------------------------------------------
- Aggregate
-   ->  Gather Motion 3:1  (slice1; segments: 3)
-         ->  Seq Scan on dqa_t1
+                               QUERY PLAN                               
+------------------------------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 3:1  (slice2; segments: 3)
+         ->  Partial Aggregate
+               ->  Streaming HashAggregate
+                     Group Key: d, c, dt
+                     ->  Redistribute Motion 3:3  (slice1; segments: 3)
+                           Hash Key: d, c, dt
+                           ->  Split Ordered Aggregate
+                                 Split by Col: d, c, dt
+                                 ->  Seq Scan on dqa_t1
  Optimizer: Postgres query optimizer
-(4 rows)
+(11 rows)
 
 select count(distinct d), count(distinct dt) from dqa_t1 group by c;
  count | count 
@@ -147,22 +155,24 @@ select count(distinct d), count(distinct dt) from dqa_t1 group by c;
     10 |    10
 (10 rows)
 
--- start_ignore
--- GPDB_96_MERGE_FIXME: this used to get a smarter multi-dqa agg plan
--- end_ignore
 explain (costs off) select count(distinct d), count(distinct dt) from dqa_t1 group by c;
-                            QUERY PLAN                            
-------------------------------------------------------------------
- Gather Motion 3:1  (slice2; segments: 3)
-   ->  GroupAggregate
-         Group Key: c
-         ->  Sort
-               Sort Key: c
-               ->  Redistribute Motion 3:3  (slice1; segments: 3)
-                     Hash Key: c
-                     ->  Seq Scan on dqa_t1
+                               QUERY PLAN                               
+------------------------------------------------------------------------
+ Finalize HashAggregate
+   Group Key: c
+   ->  Gather Motion 3:1  (slice2; segments: 3)
+         ->  Partial HashAggregate
+               Group Key: c
+               ->  Streaming HashAggregate
+                     Group Key: c, d, dt
+                     ->  Redistribute Motion 3:3  (slice1; segments: 3)
+                           Hash Key: c, d, dt
+                           ->  Split Ordered Aggregate
+                                 Split by Col: d, dt
+                                 Group Key: c
+                                 ->  Seq Scan on dqa_t1
  Optimizer: Postgres query optimizer
-(9 rows)
+(14 rows)
 
 select count(distinct d), count(distinct dt) from dqa_t1 group by d;
  count | count 
@@ -192,20 +202,26 @@ select count(distinct d), count(distinct dt) from dqa_t1 group by d;
      1 |     5
 (23 rows)
 
--- start_ignore
--- GPDB_96_MERGE_FIXME: this used to get a smarter multi-dqa agg plan
--- end_ignore
 explain (costs off) select count(distinct d), count(distinct dt) from dqa_t1 group by d;
-                QUERY PLAN                
-------------------------------------------
- Gather Motion 3:1  (slice1; segments: 3)
-   ->  GroupAggregate
-         Group Key: d
-         ->  Sort
-               Sort Key: d
-               ->  Seq Scan on dqa_t1
+                                  QUERY PLAN                                  
+------------------------------------------------------------------------------
+ Split Ordered Aggregate
+   Group Key: (<d>)
+   ->  Finalize HashAggregate
+         Group Key: (<d>)
+         ->  Gather Motion 3:1  (slice2; segments: 3)
+               ->  Partial HashAggregate
+                     Group Key: (<d>)
+                     ->  Streaming HashAggregate
+                           Group Key: (<d>), d, dt
+                           ->  Redistribute Motion 3:3  (slice1; segments: 3)
+                                 Hash Key: (<d>), d, dt
+                                 ->  Split Ordered Aggregate
+                                       Split by Col: d, dt
+                                       Group Key: <d>
+                                       ->  Seq Scan on dqa_t1
  Optimizer: Postgres query optimizer
-(7 rows)
+(16 rows)
 
 select count(distinct dqa_t1.d) from dqa_t1, dqa_t2 where dqa_t1.d = dqa_t2.d;
  count 
@@ -461,17 +477,21 @@ select count(distinct c), count(distinct dt) from dqa_t1;
     10 |    34
 (1 row)
 
--- start_ignore
--- GPDB_96_MERGE_FIXME: this used to get a smarter multi-dqa agg plan
--- end_ignore
 explain (costs off) select count(distinct c), count(distinct dt) from dqa_t1;
-                   QUERY PLAN                   
-------------------------------------------------
- Aggregate
-   ->  Gather Motion 3:1  (slice1; segments: 3)
-         ->  Seq Scan on dqa_t1
+                               QUERY PLAN                               
+------------------------------------------------------------------------
+ Finalize Aggregate
+   ->  Gather Motion 3:1  (slice2; segments: 3)
+         ->  Partial Aggregate
+               ->  Streaming HashAggregate
+                     Group Key: c, dt
+                     ->  Redistribute Motion 3:3  (slice1; segments: 3)
+                           Hash Key: c, dt
+                           ->  Split Ordered Aggregate
+                                 Split by Col: c, dt
+                                 ->  Seq Scan on dqa_t1
  Optimizer: Postgres query optimizer
-(4 rows)
+(11 rows)
 
 select count(distinct c), count(distinct dt), i from dqa_t1 group by i;
  count | count | i  
@@ -490,22 +510,24 @@ select count(distinct c), count(distinct dt), i from dqa_t1 group by i;
      5 |     8 |  4
 (12 rows)
 
--- start_ignore
--- GPDB_96_MERGE_FIXME: this used to get a smarter multi-dqa agg plan
--- end_ignore
 explain (costs off) select count(distinct c), count(distinct dt), i from dqa_t1 group by i;
-                            QUERY PLAN                            
-------------------------------------------------------------------
- Gather Motion 3:1  (slice2; segments: 3)
-   ->  GroupAggregate
-         Group Key: i
-         ->  Sort
-               Sort Key: i
-               ->  Redistribute Motion 3:3  (slice1; segments: 3)
-                     Hash Key: i
-                     ->  Seq Scan on dqa_t1
+                               QUERY PLAN                               
+------------------------------------------------------------------------
+ Finalize HashAggregate
+   Group Key: i
+   ->  Gather Motion 3:1  (slice2; segments: 3)
+         ->  Partial HashAggregate
+               Group Key: i
+               ->  Streaming HashAggregate
+                     Group Key: i, c, dt
+                     ->  Redistribute Motion 3:3  (slice1; segments: 3)
+                           Hash Key: i, c, dt
+                           ->  Split Ordered Aggregate
+                                 Split by Col: c, dt
+                                 Group Key: i
+                                 ->  Seq Scan on dqa_t1
  Optimizer: Postgres query optimizer
-(9 rows)
+(14 rows)
 
 select count(distinct i), count(distinct c), d from dqa_t1 group by d;
  count | count | d  
@@ -535,20 +557,24 @@ select count(distinct i), count(distinct c), d from dqa_t1 group by d;
      5 |     5 |  4
 (23 rows)
 
--- start_ignore
--- GPDB_96_MERGE_FIXME: this used to get a smarter multi-dqa agg plan
--- end_ignore
 explain (costs off) select count(distinct i), count(distinct c), d from dqa_t1 group by d;
-                QUERY PLAN                
-------------------------------------------
- Gather Motion 3:1  (slice1; segments: 3)
-   ->  GroupAggregate
-         Group Key: d
-         ->  Sort
-               Sort Key: d
-               ->  Seq Scan on dqa_t1
+                               QUERY PLAN                               
+------------------------------------------------------------------------
+ Finalize HashAggregate
+   Group Key: d
+   ->  Gather Motion 3:1  (slice2; segments: 3)
+         ->  Partial HashAggregate
+               Group Key: d
+               ->  Streaming HashAggregate
+                     Group Key: d, i, c
+                     ->  Redistribute Motion 3:3  (slice1; segments: 3)
+                           Hash Key: d, i, c
+                           ->  Split Ordered Aggregate
+                                 Split by Col: i, c
+                                 Group Key: d
+                                 ->  Seq Scan on dqa_t1
  Optimizer: Postgres query optimizer
-(7 rows)
+(14 rows)
 
 select count(distinct dqa_t1.dt) from dqa_t1, dqa_t2 where dqa_t1.c = dqa_t2.c;
  count 

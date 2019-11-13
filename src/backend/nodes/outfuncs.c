@@ -978,6 +978,17 @@ _outAgg(StringInfo str, const Agg *node)
 	WRITE_NODE_FIELD(groupingSets);
 	WRITE_NODE_FIELD(chain);
 	WRITE_BOOL_FIELD(streaming);
+	WRITE_INT_FIELD(numDisCols);
+	WRITE_BOOL_FIELD(shadow_elimit);
+	WRITE_INT_FIELD(mappinglen);
+
+	appendStringInfoString(str, " :distColIdx");
+	for (i = 0; i < node->numDisCols; i++)
+		appendStringInfo(str, " %d", node->distColIdx[i]);
+
+	appendStringInfoString(str, " :shadow_mapping");
+	for (i = 0; i < node->mappinglen; i++)
+		appendStringInfo(str, " %d", node->shadow_mapping[i]);
 }
 #endif /* COMPILING_BINARY_FUNCS */
 
@@ -1525,6 +1536,14 @@ _outGroupId(StringInfo str, const GroupId *node)
 
 	WRITE_INT_FIELD(agglevelsup);
 	WRITE_LOCATION_FIELD(location);
+}
+
+static void
+_outShadowExpr(StringInfo str, const ShadowExpr *node)
+{
+	WRITE_NODE_TYPE("SHADOWEXPR");
+
+	WRITE_NODE_FIELD(expr);
 }
 
 static void
@@ -5439,6 +5458,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_GroupId:
 				_outGroupId(str, obj);
+				break;
+			case T_ShadowExpr:
+				_outShadowExpr(str, obj);
 				break;
 			case T_WindowFunc:
 				_outWindowFunc(str, obj);

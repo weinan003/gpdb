@@ -1358,6 +1358,10 @@ ExplainNode(PlanState *planstate, List *ancestors,
 						pname = "HashAggregate";
 						strategy = "Hashed";
 						break;
+					case AGG_SPLITORDERED:
+						pname = "Split Ordered Aggregate";
+						strategy = "Plain";
+						break;
 					default:
 						pname = "Aggregate ???";
 						strategy = "???";
@@ -2543,6 +2547,12 @@ show_agg_keys(AggState *astate, List *ancestors,
 			  ExplainState *es)
 {
 	Agg		   *plan = (Agg *) astate->ss.ps.plan;
+
+	if (plan->numDisCols)
+		show_sort_group_keys(outerPlanState(astate), "Split by Col",
+							 plan->numDisCols, plan->distColIdx,
+							 NULL, NULL, NULL,
+							 ancestors, es);
 
 	if (plan->numCols > 0 || plan->groupingSets)
 	{

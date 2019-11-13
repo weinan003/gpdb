@@ -1394,6 +1394,16 @@ _readGroupId(void)
 	READ_DONE();
 }
 
+static ShadowExpr*
+_readShadowExpr(void)
+{
+	READ_LOCALS(ShadowExpr);
+
+	READ_NODE_FIELD(expr);
+
+	READ_DONE();
+}
+
 /*
  * _readWindowFunc
  */
@@ -3069,6 +3079,11 @@ _readAgg(void)
 	READ_NODE_FIELD(groupingSets);
 	READ_NODE_FIELD(chain);
 	READ_BOOL_FIELD(streaming);
+	READ_INT_FIELD(numDisCols);
+	READ_BOOL_FIELD(shadow_elimit);
+	READ_INT_FIELD(mappinglen);
+	READ_ATTRNUMBER_ARRAY(distColIdx, local_node->numDisCols);
+	READ_INT_ARRAY(shadow_mapping, local_node->mappinglen);
 
 	READ_DONE();
 }
@@ -4064,6 +4079,8 @@ parseNodeString(void)
 		return_value = _readGroupingFunc();
 	else if (MATCH("GROUPID", 7))
 		return_value = _readGroupId();
+	else if (MATCH("SHADOWEXPR", 10))
+		return_value = _readShadowExpr();
 	else if (MATCH("WINDOWFUNC", 10))
 		return_value = _readWindowFunc();
 	else if (MATCH("ARRAYREF", 8))

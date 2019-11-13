@@ -1167,6 +1167,11 @@ _copyAgg(const Agg *from)
 	COPY_NODE_FIELD(groupingSets);
 	COPY_NODE_FIELD(chain);
 	COPY_SCALAR_FIELD(streaming);
+	COPY_SCALAR_FIELD(numDisCols);
+	COPY_SCALAR_FIELD(shadow_elimit);
+	COPY_SCALAR_FIELD(mappinglen);
+	COPY_POINTER_FIELD(distColIdx, from->numDisCols * sizeof(AttrNumber));
+	COPY_POINTER_FIELD(shadow_mapping, from->mappinglen * sizeof(int));
 
 	return newnode;
 }
@@ -5435,7 +5440,15 @@ _copyForeignKeyCacheInfo(const ForeignKeyCacheInfo *from)
 	return newnode;
 }
 
+static ShadowExpr*
+_copyShadowExpr(const ShadowExpr *from)
+{
+	ShadowExpr * newnode = makeNode(ShadowExpr);
 
+	COPY_NODE_FIELD(expr);
+
+	return newnode;
+}
 /*
  * copyObject
  *
@@ -6443,6 +6456,10 @@ copyObject(const void *from)
 			 */
 		case T_ForeignKeyCacheInfo:
 			retval = _copyForeignKeyCacheInfo(from);
+			break;
+
+		case T_ShadowExpr:
+			retval = _copyShadowExpr(from);
 			break;
 
 		default:

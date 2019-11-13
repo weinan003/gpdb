@@ -1127,6 +1127,12 @@ typedef struct Agg
 
 	/* Stream entries when out of memory instead of spilling to disk */
 	bool		streaming;
+
+	int			numDisCols;
+	bool        shadow_elimit;
+	int         mappinglen;
+	AttrNumber	*distColIdx;
+	int         *shadow_mapping;
 } Agg;
 
 /* ----------------
