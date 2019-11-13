@@ -167,10 +167,28 @@ cdb_create_twostage_grouping_paths(PlannerInfo *root,
 		/*
 		 * Try possible plans for DISTINCT-qualified aggregate.
 		 */
-		add_single_dqa_hash_agg_path(root,
-									 cheapest_path,
-									 &cxt,
-									 output_rel);
+
+		PathTarget *input_target = NULL;
+		List	   *dqa_group_clause = NULL;
+		if (analyze_dqas(root, cheapest_path, &cxt, &input_target, &dqa_group_clause)
+				&& !input_target
+				&& !dqa_group_clause)
+		{
+			add_single_dqa_hash_agg_path(root,
+			                             cheapest_path,
+			                             &cxt,
+			                             output_rel);
+		}
+		else
+		{
+
+			cheapest_path = add_splitorderagg_path();
+
+			add_single_dqa_hash_agg_path(root,
+			                             cheapest_path,
+			                             &cxt,
+			                             output_rel);
+		}
 	}
 	/*
 	 * GPDB_96_MERGE_FIXME: multiple DISTINCT-Qualified Aggregates
@@ -209,7 +227,9 @@ add_twostage_group_agg_path(PlannerInfo *root,
 		CdbPathLocus distinct_locus;
 		bool		distinct_need_redistribute;
 
-		if (!analyze_dqas(root, path, ctx, &input_target, &dqa_group_clause))
+		if (!analyze_dqas(root, path, ctx, &input_target, &dqa_group_clause)
+				&& !input_target
+				&& !dqa_group_clause)
 			return;
 
 		path = (Path *) create_projection_path(root, path->parent, path, input_target);
@@ -388,6 +408,9 @@ analyze_dqas(PlannerInfo *root,
 	ListCell   *lc;
 	Index		sortgroupref;
 	Index		maxRef;
+	bool        ret = true;
+	*dqa_input_target_p = NULL;
+	*dqa_group_clause_p = NULL;
 
 	/* Prepare a modifiable copy of the input path target */
 	input_target = copy_pathtarget(path->pathtarget);
@@ -460,7 +483,7 @@ analyze_dqas(PlannerInfo *root,
 			sortgroupref = sortcl->tleSortGroupRef;
 		else if (sortgroupref != sortcl->tleSortGroupRef)
 		{
-			return false;
+			ret = false;
 		}
 		else
 			continue;
@@ -484,7 +507,7 @@ analyze_dqas(PlannerInfo *root,
 			if (!aggref->aggdistinct)
 			{
 				/* mixing DISTINCT and non-DISTINCT aggs not supported */
-				return false;
+				ret = false;
 			}
 		}
 	}
@@ -492,7 +515,7 @@ analyze_dqas(PlannerInfo *root,
 	/* Ok, we can do this */
 	*dqa_input_target_p = input_target;
 	*dqa_group_clause_p = dqa_group_clause;
-	return true;
+	return ret;
 }
 
 /*
@@ -515,10 +538,6 @@ add_single_dqa_hash_agg_path(PlannerInfo *root,
 
 	if (!gp_enable_agg_distinct)
 		return;
-
-	if (!analyze_dqas(root, path, ctx, &input_target, &dqa_group_clause))
-		return;
-
 
 	/*
 	 * GPDB_96_MERGE_FIXME: compute the hash table size once. But we create
