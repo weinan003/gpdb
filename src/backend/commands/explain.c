@@ -1358,6 +1358,10 @@ ExplainNode(PlanState *planstate, List *ancestors,
 						pname = "HashAggregate";
 						strategy = "Hashed";
 						break;
+					case AGG_SPLITORDER:
+						pname = "SplitOrderAggregate";
+						strategy = "Plain";
+						break;
 					default:
 						pname = "Aggregate ???";
 						strategy = "???";
