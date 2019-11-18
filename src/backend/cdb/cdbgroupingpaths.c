@@ -188,6 +188,15 @@ cdb_create_twostage_grouping_paths(PlannerInfo *root,
 		}
 		else if (input_target && dqa_group_clause)
 		{
+			/*
+			 * Finalize Aggregate
+			 *   -> Gather Motion
+			 *        -> Partial Aggregate
+			 *             -> HashAggregate, to remote duplicates
+			 *                  -> Redistribute Motion (according to DISTINCT expr)
+			 *                       -> Streaming SplitOrderAggregate (Split tuple according to DISTINCT expr)
+			 *                            -> input
+			 */
 
 			HashAggTableSizes hash_info;
 			if (calcHashAggTableSizes(work_mem * 1024L,
@@ -214,6 +223,7 @@ cdb_create_twostage_grouping_paths(PlannerInfo *root,
 				                                           dqa_group_clause, NIL, NIL,
 				                                           &distinct_need_redistribute);
 
+				path = (Path *) create_projection_path(root, subPath->parent, subPath, input_target);
 
 				path = (Path *) create_agg_path(root,
 				                                output_rel,
@@ -221,27 +231,40 @@ cdb_create_twostage_grouping_paths(PlannerInfo *root,
 				                                input_target,
 				                                AGG_SPLITORDER,
 				                                AGGSPLIT_SIMPLE,
-				                                false, /* streaming */
-				                                NIL,
+				                                true, /* streaming */
+				                                dqa_group_clause,
 				                                NIL,
 				                                cxt.agg_partial_costs, /* FIXME */
 				                                cxt.dNumGroups * getgpsegmentCount(),
 				                                &hash_info);
 
-				if(distinct_need_redistribute)
-					path = cdbpath_create_motion_path(root, path, NIL, false, distinct_locus);
+				path = cdbpath_create_motion_path(root, path, NIL, false,
+				                                  distinct_locus);
 
 				path = (Path *) create_agg_path(root,
 				                                output_rel,
 				                                path,
-				                                cxt.partial_grouping_target,
+				                                input_target,
+				                                AGG_HASHED,
+				                                AGGSPLIT_SIMPLE,
+				                                false, /* streaming */
+				                                dqa_group_clause,
+				                                NIL,
+				                                cxt.agg_partial_costs, /* FIXME */
+				                                cxt.dNumGroups * getgpsegmentCount(),
+				                                &hash_info);
+
+				path = (Path *) create_agg_path(root,
+				                                output_rel,
+				                                path,
+				                                strip_aggdistinct(cxt.partial_grouping_target),
 				                                parse->groupClause ? AGG_HASHED : AGG_PLAIN,
-				                                AGGSPLIT_INITIAL_SERIAL,
+				                                AGGSPLIT_INITIAL_SERIAL | AGGSPLIT_DEDUPLICATED,
 				                                false, /* streaming */
 				                                parse->groupClause,
-				                                (List *) parse->havingQual,
-				                                cxt.agg_final_costs,
-				                                cxt.dNumGroups,
+				                                NIL,
+				                                cxt.agg_partial_costs,
+				                                cxt.dNumGroups * getgpsegmentCount(),
 				                                &hash_info);
 
 				if (group_need_redistribute)
@@ -253,16 +276,13 @@ cdb_create_twostage_grouping_paths(PlannerInfo *root,
 				                                path,
 				                                cxt.target,
 				                                parse->groupClause ? AGG_HASHED : AGG_PLAIN,
-				                                AGGSPLIT_FINAL_DESERIAL ,
+				                                AGGSPLIT_FINAL_DESERIAL | AGGSPLIT_DEDUPLICATED,
 				                                false, /* streaming */
 				                                parse->groupClause,
 				                                (List *) parse->havingQual,
 				                                cxt.agg_final_costs,
 				                                cxt.dNumGroups,
 				                                &hash_info);
-
-				path = cdbpath_create_motion_path(root, path, NIL, false, group_locus);
-
 
 				add_path(output_rel, path);
 			}
@@ -568,53 +588,44 @@ analyze_dqas(PlannerInfo *root,
 		dqa_group_clause = lappend(dqa_group_clause, sortcl);
 	}
 
-	/* Check that there are no non-DISTINCT aggregates mixed in. */
-	List *varnos = pull_var_clause((Node *) ctx->target->exprs,
-	                               PVC_INCLUDE_AGGREGATES |
-	                               PVC_INCLUDE_WINDOWFUNCS |
-			                       PVC_INCLUDE_PLACEHOLDERS);
-	foreach (lc, varnos)
-	{
-		Node	   *node = lfirst(lc);
-
-		if (IsA(node, Aggref))
-		{
-			Aggref	   *aggref = (Aggref *) node;
-
-			if (!aggref->aggdistinct)
-			{
-				/* mixing DISTINCT and non-DISTINCT aggs */
-				isSingleDQA = false;
-			}
-		}
-	}
-
 	if(isSingleDQA)
 	{
-		/* input_target_ret_p add DQA expr into
-		 * group_clause_ret_p contains `GROUP BY` exprs and DQA expr
-		 */
-		*input_target_ret_p = input_target;
-		*group_clause_ret_p = list_copy(root->parse->groupClause);
-		*group_clause_ret_p = list_concat(*group_clause_ret_p, dqa_group_clause);
+		/* Check that there are no non-DISTINCT aggregates mixed in. */
+		List *varnos = pull_var_clause((Node *) ctx->target->exprs,
+		                               PVC_INCLUDE_AGGREGATES |
+				                               PVC_INCLUDE_WINDOWFUNCS |
+				                               PVC_INCLUDE_PLACEHOLDERS);
+		foreach (lc, varnos)
+		{
+			Node	   *node = lfirst(lc);
+
+			if (IsA(node, Aggref))
+			{
+				Aggref	   *aggref = (Aggref *) node;
+
+				if (!aggref->aggdistinct)
+				{
+					/* mixing DISTINCT and non-DISTINCT aggs */
+					isSingleDQA = false;
+					break;
+				}
+			}
+		}
+
 	}
-	else
+
+	/* input_target_ret_p add DQA expr into
+	 * group_clause_ret_p contains `GROUP BY` exprs and DQA expr
+	 */
+	*input_target_ret_p = input_target;
+	*group_clause_ret_p = list_copy(root->parse->groupClause);
+	*group_clause_ret_p = list_concat(*group_clause_ret_p, dqa_group_clause);
+
+	if(!isSingleDQA)
 	{
 		/* add SplitTupleId into pathtarget */
 		SplitTupleId *stid = makeNode(SplitTupleId);
-		add_column_to_pathtarget(input_target, stid, ++maxRef);
-
-		/* add SplitTupleId into group clause*/
-		SortGroupClause *sgclause = makeNode(SortGroupClause);
-		sgclause->tleSortGroupRef = maxRef;
-		sgclause->hashable = true;	/* we verified earlier that it's hashable */
-		dqa_group_clause = lappend(dqa_group_clause, sgclause);
-
-		/* input_target_ret_p add DQA exprs into
-		 * group_clause_ret_p contains DQA exprs and SplitTupleId
-		 */
-		*input_target_ret_p = input_target;
-		*group_clause_ret_p =  dqa_group_clause;
+		add_column_to_pathtarget(*input_target_ret_p, stid, 0);
 	}
 
 	return isSingleDQA;
