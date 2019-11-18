@@ -3739,6 +3739,9 @@ equal(const void *a, const void *b)
 		case T_RoleSpec:
 			retval = _equalRoleSpec(a, b);
 			break;
+		case T_SplitTupleId:
+			retval = true;
+			break;
 
 		default:
 			elog(ERROR, "unrecognized node type: %d",

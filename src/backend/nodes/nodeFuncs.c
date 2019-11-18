@@ -281,6 +281,9 @@ exprType(const Node *expr)
 		case T_PartListNullTestExpr:
 			type = BOOLOID;
 			break;
+		case T_SplitTupleId:
+			type = INT4OID;
+			break;
 
 		default:
 			elog(ERROR, "unrecognized node type: %d", (int) nodeTag(expr));
@@ -966,6 +969,9 @@ exprCollation(const Node *expr)
 			 * ORCA currently does not support collation,
 			 * so return invalid oid for ORCA only expressions
 			 */
+			coll = InvalidOid;
+			break;
+		case T_SplitTupleId:
 			coll = InvalidOid;
 			break;
 		default:
@@ -1933,6 +1939,7 @@ expression_tree_walker(Node *node,
 		case T_PartBoundOpenExpr:
 		case T_PartListRuleExpr:
 		case T_PartListNullTestExpr:
+		case T_SplitTupleId:
 			/* primitive node types with no expression subnodes */
 			break;
 		case T_WithCheckOption:
@@ -3217,6 +3224,14 @@ expression_tree_mutator(Node *node,
 				return (Node *) newnode;
 			}
 			break;
+		case T_SplitTupleId:
+		{
+			SplitTupleId *stId = (SplitTupleId *)node;
+			SplitTupleId *newstId;
+			FLATCOPY(newstId, stId, SplitTupleId);
+			return (Node *) newstId;
+		}
+		break;
 		default:
 			elog(ERROR, "unrecognized node type: %d",
 				 (int) nodeTag(node));

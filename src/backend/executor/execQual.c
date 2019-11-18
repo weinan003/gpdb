@@ -216,6 +216,11 @@ static Datum ExecEvalPartListRuleExpr(PartListRuleExprState *exprstate,
 static Datum ExecEvalPartListNullTestExpr(PartListNullTestExprState *exprstate,
 							ExprContext *econtext,
 							bool *isNull, ExprDoneCond *isDone);
+static Datum
+ExecEvalSplitTupleIdExpr(SplitTupleIdExprState *gstate,
+                         ExprContext *econtext,
+                         bool *isNull,
+                         ExprDoneCond *isDone);
 
 static bool ExecIsExprUnsafeToConst_walker(Node *node, void *context);
 static bool ExecIsExprUnsafeToConst(Node *node);
@@ -6154,6 +6159,10 @@ ExecInitExpr(Expr *node, PlanState *parent)
 				state = (ExprState *) exprstate;
 			}
 			break;
+		case T_SplitTupleId:
+			state = (ExprState *) makeNode(ExprState);
+			state->evalfunc = (ExprStateEvalFunc) ExecEvalSplitTupleIdExpr;
+			break;
 
 		default:
 			elog(ERROR, "unrecognized node type: %d",
@@ -6807,4 +6816,18 @@ isJoinExprNull(List *joinExpr, ExprContext *econtext)
 	}
 
 	return joinkeys_null;
+}
+
+static Datum
+ExecEvalSplitTupleIdExpr(SplitTupleIdExprState *gstate,
+                         ExprContext *econtext,
+                         bool *isNull,
+                         ExprDoneCond *isDone)
+{
+	if (isDone)
+		*isDone = ExprSingleResult;
+
+	*isNull = false;
+
+	return Int32GetDatum(gstate->id);
 }

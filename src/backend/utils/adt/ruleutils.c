@@ -8451,6 +8451,11 @@ get_rule_expr(Node *node, deparse_context *context,
 			}
 			break;
 
+		case T_SplitTupleId:
+			{
+				appendStringInfo(buf, "SplitTupleId()");
+			}
+			break;
 		default:
 			elog(ERROR, "unrecognized node type: %d", (int) nodeTag(node));
 			break;

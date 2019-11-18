@@ -5437,6 +5437,11 @@ _copyForeignKeyCacheInfo(const ForeignKeyCacheInfo *from)
 	return newnode;
 }
 
+static SplitTupleId*
+_copySplitTupleId(const SplitTupleId *from)
+{
+	return makeNode(SplitTupleId);
+}
 
 /*
  * copyObject
@@ -6445,6 +6450,10 @@ copyObject(const void *from)
 			 */
 		case T_ForeignKeyCacheInfo:
 			retval = _copyForeignKeyCacheInfo(from);
+			break;
+
+		case T_SplitTupleId:
+			retval = _copySplitTupleId(from);
 			break;
 
 		default:

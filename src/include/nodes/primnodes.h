@@ -1664,4 +1664,13 @@ typedef struct PartListNullTestExpr
 	NullTestType nulltesttype;	/* IS NULL, IS NOT NULL */
 } PartListNullTestExpr;
 
+/*
+ * SplitTupleId
+ *
+ * Represents split number for a tuple.
+ */
+typedef struct SplitTupleId
+{
+	Expr        expr;
+} SplitTupleId;
 #endif   /* PRIMNODES_H */
