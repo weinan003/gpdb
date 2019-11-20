@@ -89,6 +89,7 @@ static DQATYPE analyze_dqas(PlannerInfo *root,
 
 static PathTarget *
 strip_aggdistinct(PathTarget *target);
+
 /*
  * Function: cdb_grouping_planner
  *
@@ -229,47 +230,86 @@ add_twostage_group_agg_path(PlannerInfo *root,
 							RelOptInfo *output_rel)
 {
 	Query	   *parse = root->parse;
-	CdbPathLocus singleQE_locus;
 	Path	   *initial_agg_path;
 	CdbPathLocus group_locus;
-	bool		need_redistribute;
-	int			extra_aggsplitops = 0;
+	CdbPathLocus distinct_locus;
+	CdbPathLocus singleQE_locus;
+	bool		group_need_redistribute;
+	bool		distinct_need_redistribute;
 
 	group_locus = cdb_choose_grouping_locus(root, path, ctx->target,
 											parse->groupClause, NIL, NIL,
-											&need_redistribute);
+											&group_need_redistribute);
+
 	/*
 	 * If the distribution of this path is suitable, two-stage aggregation
 	 * is not applicable.
 	 */
-	if (!need_redistribute)
+	if (!group_need_redistribute)
 		return;
 
+	/*
+	 * gpadmin=# explain verbose select count(distinct c2), count(distinct c3) from t1;
+	 *                                                    QUERY PLAN
+	 * ----------------------------------------------------------------------------------------------------------------
+	 *  Finalize Aggregate  (cost=1268.67..1268.68 rows=1 width=16)
+	 *    Output: count(DISTINCT c2), count(DISTINCT c3)
+	 *    ->  Gather Motion 3:1  (slice2; segments: 3)  (cost=1268.64..1268.67 rows=1 width=16)
+	 *          Output: (PARTIAL count(DISTINCT c2)), (PARTIAL count(DISTINCT c3))
+	 *          ->  Partial Aggregate  (cost=1268.64..1268.65 rows=1 width=16)
+	 *                Output: PARTIAL count(DISTINCT c2), PARTIAL count(DISTINCT c3)
+	 *                ->  Sort  (cost=1268.61..1268.62 rows=1 width=8)
+	 *                      Output: c2, c3, (SplitTupleId())
+	 *                      ->  Redistribute Motion 3:3  (slice1; segments: 3)  (cost=1268.50..1268.59 rows=1 width=8)
+	 *                            Output: c2, c3, (SplitTupleId())
+	 *                            Hash Key: c2, c3
+	 *                            ->  SplitOrderAggregate  (cost=1268.50..1268.53 rows=1 width=8)
+	 *                                  Output: c2, c3, SplitTupleId()
+	 *                                  ->  Seq Scan on public.t1  (cost=0.00..879.00 rows=25967 width=8)
+	 *                                        Output: c2, c3
+	 *  Optimizer: Postgres query optimizer
+	 * (16 rows)
+	 */
 	if (ctx->agg_costs->distinctAggrefs)
 	{
 		PathTarget *input_target = NULL;
 		List	   *dqa_group_clause = NULL;
-		CdbPathLocus distinct_locus;
-		bool		distinct_need_redistribute;
 
-		if (SINGLEDQA != analyze_dqas(root, path, ctx, &input_target, &dqa_group_clause))
+		DQATYPE type = analyze_dqas(root, path, ctx, &input_target, &dqa_group_clause);
+
+		if (type != SINGLEDQA && type != MULTIDQAS)
 			return;
-
-		path = (Path *) create_projection_path(root, path->parent, path, input_target);
 
 		distinct_locus = cdb_choose_grouping_locus(root, path,
 												   input_target,
 												   dqa_group_clause, NIL, NIL,
 												   &distinct_need_redistribute);
 
-		/* If the input distribution matches the distinct, we can proceed */
-		if (distinct_need_redistribute)
-			return;
+		path = (Path *) create_projection_path(root, path->parent, path, path->pathtarget);
 
-		extra_aggsplitops = AGGSPLITOP_DEDUPLICATED;
+		/* add SplitTupleId into pathtarget */
+		SplitTupleId *stid = makeNode(SplitTupleId);
+		add_column_to_pathtarget(input_target, (Expr *)stid, 0);
+
+		/* split the tuples if there is at least one dqa */
+		path = (Path *) create_agg_path(root,
+												 output_rel,
+												 path,
+												 input_target,
+												 AGG_SPLITORDER,
+												 AGGSPLIT_SIMPLE,
+												 false, /* streaming */
+												 NIL,
+												 NIL,
+												 ctx->agg_partial_costs, /* FIXME */
+												 ctx->dNumGroups * getgpsegmentCount(),
+												 NULL);
+
+		if (distinct_need_redistribute)
+			path = cdbpath_create_motion_path(root, path, NIL, false, distinct_locus);
 	}
 
-	if (!is_sorted)
+	if (!is_sorted || ctx->agg_costs->distinctAggrefs)
 	{
 		path = (Path *) create_sort_path(root,
 										 output_rel,
