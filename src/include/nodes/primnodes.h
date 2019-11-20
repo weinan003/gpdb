@@ -1672,5 +1672,6 @@ typedef struct PartListNullTestExpr
 typedef struct SplitTupleId
 {
 	Expr        expr;
+	Index       sid;
 } SplitTupleId;
 #endif   /* PRIMNODES_H */
