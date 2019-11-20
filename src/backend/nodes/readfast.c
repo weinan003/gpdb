@@ -2526,6 +2526,9 @@ readNodeBinary(void)
 			case T_GroupId:
 				return_value = _readGroupId();
 				break;
+			case T_SplitTupleId:
+				return_value = _readSplitTupleId();
+				break;
 			case T_WindowFunc:
 				return_value = _readWindowFunc();
 				break;
