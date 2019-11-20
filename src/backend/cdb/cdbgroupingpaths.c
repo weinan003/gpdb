@@ -280,6 +280,12 @@ add_twostage_group_agg_path(PlannerInfo *root,
 		if (type != SINGLEDQA && type != MULTIDQAS)
 			return;
 
+		/* If the tuples are split, they are not distributed as before. */
+		if (type == MULTIDQAS)
+		{
+			path->locus.locustype = CdbLocusType_Strewn;
+			path->locus.distkey = NIL;
+		}
 		distinct_locus = cdb_choose_grouping_locus(root, path,
 												   input_target,
 												   dqa_group_clause, NIL, NIL,
