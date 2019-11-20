@@ -1528,6 +1528,14 @@ _outGroupId(StringInfo str, const GroupId *node)
 }
 
 static void
+_outSplitTupleId(StringInfo str, const SplitTupleId *node)
+{
+	WRITE_NODE_TYPE("SPLITTUPLEID");
+
+	WRITE_INT_FIELD(sid);
+}
+
+static void
 _outWindowFunc(StringInfo str, const WindowFunc *node)
 {
 	WRITE_NODE_TYPE("WINDOWFUNC");
@@ -5454,6 +5462,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_GroupId:
 				_outGroupId(str, obj);
+				break;
+			case T_SplitTupleId:
+				_outSplitTupleId(str, obj);
 				break;
 			case T_WindowFunc:
 				_outWindowFunc(str, obj);

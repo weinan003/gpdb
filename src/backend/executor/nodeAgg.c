@@ -2558,7 +2558,7 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 	aggstate->peragg = peraggs;
 	aggstate->pertrans = pertransstates;
 
-	if (node->aggstrategy == AGG_HASHED)
+	if (node->aggstrategy == AGG_HASHED || node->aggstrategy == AGG_SPLITORDER)
 	{
 		aggstate->hash_needed = find_hash_columns(aggstate);
 	}

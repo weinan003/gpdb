@@ -543,13 +543,6 @@ analyze_dqas(PlannerInfo *root,
 	*group_clause_ret_p = list_copy(root->parse->groupClause);
 	*group_clause_ret_p = list_concat(*group_clause_ret_p, dqa_group_clause);
 
-	if(ret == MULTIDQAS)
-	{
-		/* add SplitTupleId into pathtarget */
-		SplitTupleId *stid = makeNode(SplitTupleId);
-		add_column_to_pathtarget(*input_target_ret_p, stid, 0);
-	}
-
 	return ret;
 }
 
@@ -598,6 +591,11 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	                                           dqa_group_clause, NIL, NIL,
 	                                           &distinct_need_redistribute);
 
+	/* add SplitTupleId into pathtarget */
+	input_target = copy_pathtarget(input_target);
+	SplitTupleId *stid = makeNode(SplitTupleId);
+	add_column_to_pathtarget(input_target, (Expr *)stid, 0);
+
 
 	path = (Path *) create_agg_path(root,
 	                                output_rel,
@@ -612,6 +610,7 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	                                cxt->dNumGroups * getgpsegmentCount(),
 	                                &hash_info);
 
+	if(distinct_need_redistribute)
 	path = cdbpath_create_motion_path(root, path, NIL, false,
 	                                  distinct_locus);
 
