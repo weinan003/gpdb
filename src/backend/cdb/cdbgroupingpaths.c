@@ -231,6 +231,7 @@ add_twostage_group_agg_path(PlannerInfo *root,
 {
 	Query	   *parse = root->parse;
 	Path	   *initial_agg_path;
+	DQATYPE     dqa_type;
 	CdbPathLocus group_locus;
 	CdbPathLocus distinct_locus;
 	CdbPathLocus singleQE_locus;
@@ -249,73 +250,64 @@ add_twostage_group_agg_path(PlannerInfo *root,
 		return;
 
 	/*
-	 * gpadmin=# explain verbose select count(distinct c2), count(distinct c3) from t1;
-	 *                                                    QUERY PLAN
-	 * ----------------------------------------------------------------------------------------------------------------
-	 *  Finalize Aggregate  (cost=1268.67..1268.68 rows=1 width=16)
-	 *    Output: count(DISTINCT c2), count(DISTINCT c3)
-	 *    ->  Gather Motion 3:1  (slice2; segments: 3)  (cost=1268.64..1268.67 rows=1 width=16)
-	 *          Output: (PARTIAL count(DISTINCT c2)), (PARTIAL count(DISTINCT c3))
-	 *          ->  Partial Aggregate  (cost=1268.64..1268.65 rows=1 width=16)
-	 *                Output: PARTIAL count(DISTINCT c2), PARTIAL count(DISTINCT c3)
-	 *                ->  Sort  (cost=1268.61..1268.62 rows=1 width=8)
-	 *                      Output: c2, c3, (SplitTupleId())
-	 *                      ->  Redistribute Motion 3:3  (slice1; segments: 3)  (cost=1268.50..1268.59 rows=1 width=8)
-	 *                            Output: c2, c3, (SplitTupleId())
-	 *                            Hash Key: c2, c3
-	 *                            ->  SplitOrderAggregate  (cost=1268.50..1268.53 rows=1 width=8)
-	 *                                  Output: c2, c3, SplitTupleId()
-	 *                                  ->  Seq Scan on public.t1  (cost=0.00..879.00 rows=25967 width=8)
-	 *                                        Output: c2, c3
-	 *  Optimizer: Postgres query optimizer
-	 * (16 rows)
+	 *  Finalize Aggregate
+	 *    ->  Gather Motion
+	 *        ->  Partial Aggregate
+	 *            ->  Sort (if needed)
+	 *                ->  Redistribute Motion (if multi DQAs)
+	 *                    ->  SplitOrderAggregate (if multi DQAs)
+	 *                      ->  Seq Scan
 	 */
 	if (ctx->agg_costs->distinctAggrefs)
 	{
 		PathTarget *input_target = NULL;
 		List	   *dqa_group_clause = NULL;
 
-		DQATYPE type = analyze_dqas(root, path, ctx, &input_target, &dqa_group_clause);
-
-		if (type != SINGLEDQA && type != MULTIDQAS)
+		dqa_type = analyze_dqas(root, path, ctx, &input_target, &dqa_group_clause);
+		if (dqa_type != SINGLEDQA && dqa_type != MULTIDQAS)
 			return;
 
+		path = (Path *) create_projection_path(root, path->parent, path, path->pathtarget);
+
 		/* If the tuples are split, they are not distributed as before. */
-		if (type == MULTIDQAS)
+		if (dqa_type == MULTIDQAS && CdbPathLocus_IsHashed(path->locus))
 		{
-			path->locus.locustype = CdbLocusType_Strewn;
-			path->locus.distkey = NIL;
+			int numsegments = path->locus.numsegments;
+			CdbPathLocus_MakeStrewn(&path->locus, numsegments);
 		}
 		distinct_locus = cdb_choose_grouping_locus(root, path,
 												   input_target,
 												   dqa_group_clause, NIL, NIL,
 												   &distinct_need_redistribute);
 
-		path = (Path *) create_projection_path(root, path->parent, path, path->pathtarget);
 
-		/* add SplitTupleId into pathtarget */
-		SplitTupleId *stid = makeNode(SplitTupleId);
-		add_column_to_pathtarget(input_target, (Expr *)stid, 0);
+		/* single DQA doesn't need to split */
+		if (dqa_type == MULTIDQAS)
+		{
+			/* add SplitTupleId into pathtarget */
+			SplitTupleId *stid = makeNode(SplitTupleId);
+			add_column_to_pathtarget(input_target, (Expr *)stid, 0);
 
-		/* split the tuples if there is at least one dqa */
-		path = (Path *) create_agg_path(root,
-												 output_rel,
-												 path,
-												 input_target,
-												 AGG_SPLITORDER,
-												 AGGSPLIT_SIMPLE,
-												 false, /* streaming */
-												 NIL,
-												 NIL,
-												 ctx->agg_partial_costs, /* FIXME */
-												 ctx->dNumGroups * getgpsegmentCount(),
-												 NULL);
+			/* split the tuples if there is at least one dqa */
+			path = (Path *) create_agg_path(root,
+											output_rel,
+											path,
+											input_target,
+											AGG_SPLITORDER,
+											AGGSPLIT_SIMPLE,
+											false, /* streaming */
+											NIL,
+											NIL,
+											ctx->agg_partial_costs, /* FIXME */
+											ctx->dNumGroups * getgpsegmentCount(),
+											NULL);
+		}
 
 		if (distinct_need_redistribute)
 			path = cdbpath_create_motion_path(root, path, NIL, false, distinct_locus);
 	}
 
-	if (!is_sorted || ctx->agg_costs->distinctAggrefs)
+	if (!is_sorted || dqa_type == MULTIDQAS || distinct_need_redistribute)
 	{
 		path = (Path *) create_sort_path(root,
 										 output_rel,
