@@ -632,10 +632,6 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	                                        root->parse->groupClause, NIL, NIL,
 	                                        &group_need_redistribute);
 
-	distinct_locus = cdb_choose_grouping_locus(root, path,
-	                                           input_target,
-	                                           dqa_group_clause, NIL, NIL,
-	                                           &distinct_need_redistribute);
 
 	/* add SplitTupleId into pathtarget */
 	input_target = copy_pathtarget(input_target);
@@ -655,6 +651,15 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	                                cxt->agg_partial_costs, /* FIXME */
 	                                cxt->dNumGroups * getgpsegmentCount(),
 	                                &hash_info);
+
+	/* If the tuples are split, they are not distributed as before. */
+	path->locus.locustype = CdbLocusType_Strewn;
+	path->locus.distkey = NIL;
+
+	distinct_locus = cdb_choose_grouping_locus(root, path,
+	                                           input_target,
+	                                           dqa_group_clause, NIL, NIL,
+	                                           &distinct_need_redistribute);
 
 	if(distinct_need_redistribute)
 	path = cdbpath_create_motion_path(root, path, NIL, false,
