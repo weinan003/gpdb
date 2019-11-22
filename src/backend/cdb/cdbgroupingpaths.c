@@ -168,7 +168,7 @@ cdb_create_twostage_grouping_paths(PlannerInfo *root,
 											  path->pathkeys);
 			if (path == cheapest_path || is_sorted)
 			{
-#if 0
+#if 1
 				add_twostage_group_agg_path(root,
 											path,
 											is_sorted,
@@ -340,9 +340,9 @@ add_twostage_group_agg_path(PlannerInfo *root,
 		List	   *dqa_group_clause = NULL;
 
 		int maxref;
-		DQATYPE type = analyze_dqas(root, path, ctx, &input_target, &dqa_group_clause,&maxref);
+		dqa_type = analyze_dqas(root, path, ctx, &input_target, &dqa_group_clause,&maxref);
 
-		if (type != SINGLEDQA && type != MULTIDQAS)
+		if (dqa_type != SINGLEDQA && dqa_type != MULTIDQAS)
 			return;
 
 		path = (Path *) create_projection_path(root, path->parent, path, path->pathtarget);
