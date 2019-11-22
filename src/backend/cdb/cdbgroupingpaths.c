@@ -79,13 +79,15 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
                             cdb_agg_planning_context *ctx,
                             RelOptInfo *output_rel,
                             PathTarget *input_target,
-                            List	   *dqa_group_clause);
+                            List	   *dqa_group_clause,
+                             int        maxref);
 
 static DQATYPE analyze_dqas(PlannerInfo *root,
                             Path *path,
                             cdb_agg_planning_context *ctx,
                             PathTarget **input_target_ret_p,
-                            List       **group_clause_ret_p);
+                            List       **group_clause_ret_p,
+                            int        *maxref);
 
 static PathTarget *
 strip_aggdistinct(PathTarget *target);
@@ -166,11 +168,13 @@ cdb_create_twostage_grouping_paths(PlannerInfo *root,
 											  path->pathkeys);
 			if (path == cheapest_path || is_sorted)
 			{
+#if 0
 				add_twostage_group_agg_path(root,
 											path,
 											is_sorted,
 											&cxt,
 											output_rel);
+#endif
 			}
 		}
 	}
@@ -191,7 +195,8 @@ cdb_create_twostage_grouping_paths(PlannerInfo *root,
 
 		PathTarget *input_target = NULL;
 		List	   *dqa_group_clause = NULL;
-		DQATYPE type = analyze_dqas(root, cheapest_path, &cxt, &input_target, &dqa_group_clause);
+		int         maxref;
+		DQATYPE type = analyze_dqas(root, cheapest_path, &cxt, &input_target, &dqa_group_clause, &maxref);
 		switch (type)
 		{
 			case SINGLEDQA:
@@ -206,12 +211,83 @@ cdb_create_twostage_grouping_paths(PlannerInfo *root,
 				break;
 			case MULTIDQAS:
 			{
+#if 0
+				CdbPathLocus distinct_locus;
+				CdbPathLocus group_locus;
+				bool		distinct_need_redistribute;
+				bool        group_need_redistribute;
+				Path*       path = cheapest_path;
+
+				HashAggTableSizes hash_info;
+				calcHashAggTableSizes(work_mem * 1024L,
+				                      cxt.dNumGroups,
+				                      path->pathtarget->width,
+				                      false,	/* force */
+				                      &hash_info);
+
+				path = (Path *) create_projection_path(root, path->parent, path, input_target);
+
+				group_locus = cdb_choose_grouping_locus(root, path,
+				                                        input_target,
+				                                        root->parse->groupClause, NIL, NIL,
+				                                        &group_need_redistribute);
+
+				distinct_locus = cdb_choose_grouping_locus(root, path,
+				                                           input_target,
+				                                           dqa_group_clause, NIL, NIL,
+				                                           &distinct_need_redistribute);
+
+				/* add SplitTupleId into pathtarget */
+				input_target = copy_pathtarget(input_target);
+				SplitTupleId *stid = makeNode(SplitTupleId);
+				add_column_to_pathtarget(input_target, (Expr *)stid, 0);
+
+				path = (Path *) create_agg_path(root,
+				                                output_rel,
+				                                path,
+				                                input_target,
+				                                AGG_SPLITORDER,
+				                                AGGSPLIT_SIMPLE,
+				                                false, /* streaming */
+				                                dqa_group_clause,
+				                                NIL,
+				                                cxt.agg_partial_costs, /* FIXME */
+				                                cxt.dNumGroups * getgpsegmentCount(),
+				                                &hash_info);
+
+				if (group_need_redistribute)
+					path = cdbpath_create_motion_path(root, path, NIL, false,
+					                                  group_locus);
+
+				path = (Path *) create_agg_path(root,
+				                                output_rel,
+				                                path,
+				                                cxt.target,
+				                                parse->groupClause ? AGG_HASHED : AGG_PLAIN,
+				                                AGGSPLIT_DEDUPLICATED,
+				                                false, /* streaming */
+				                                parse->groupClause,
+				                                (List *) parse->havingQual,
+				                                cxt.agg_final_costs,
+				                                cxt.dNumGroups,
+				                                &hash_info);
+
+				add_path(output_rel, path);
+
+				/*
+				 * Comments just for debug split agg
+				 */
+#endif
+
+#if 1
 				add_multi_dqas_hash_agg_path(root,
 				                            cheapest_path,
 				                            &cxt,
 				                            output_rel,
 				                            input_target,
-				                            dqa_group_clause);
+				                            dqa_group_clause,
+				                            ++maxref);
+#endif
 			}
 			break;
 			case MIXEDDQAS:
@@ -263,8 +339,10 @@ add_twostage_group_agg_path(PlannerInfo *root,
 		PathTarget *input_target = NULL;
 		List	   *dqa_group_clause = NULL;
 
-		dqa_type = analyze_dqas(root, path, ctx, &input_target, &dqa_group_clause);
-		if (dqa_type != SINGLEDQA && dqa_type != MULTIDQAS)
+		int maxref;
+		DQATYPE type = analyze_dqas(root, path, ctx, &input_target, &dqa_group_clause,&maxref);
+
+		if (type != SINGLEDQA && type != MULTIDQAS)
 			return;
 
 		path = (Path *) create_projection_path(root, path->parent, path, path->pathtarget);
@@ -286,7 +364,7 @@ add_twostage_group_agg_path(PlannerInfo *root,
 		{
 			/* add SplitTupleId into pathtarget */
 			SplitTupleId *stid = makeNode(SplitTupleId);
-			add_column_to_pathtarget(input_target, (Expr *)stid, 0);
+			add_column_to_pathtarget(input_target, (Expr *)stid, ++maxref);
 
 			/* split the tuples if there is at least one dqa */
 			path = (Path *) create_agg_path(root,
@@ -461,7 +539,8 @@ analyze_dqas(PlannerInfo *root,
 			 Path *path,
 			 cdb_agg_planning_context *ctx,
 			 PathTarget **input_target_ret_p,
-			 List       **group_clause_ret_p)
+			 List       **group_clause_ret_p,
+			 int        *maxref)
 {
 	DQATYPE     ret = SINGLEDQA;
 	Query	   *parse;
@@ -580,6 +659,7 @@ analyze_dqas(PlannerInfo *root,
 	*input_target_ret_p = input_target;
 	*group_clause_ret_p = list_copy(root->parse->groupClause);
 	*group_clause_ret_p = list_concat(*group_clause_ret_p, dqa_group_clause);
+	*maxref = maxRef;
 
 	return ret;
 }
@@ -593,7 +673,8 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
                              cdb_agg_planning_context *cxt,
                              RelOptInfo *output_rel,
                              PathTarget *input_target,
-                             List	   *dqa_group_clause)
+                             List	   *dqa_group_clause,
+                             int        maxref)
 {
 	CdbPathLocus distinct_locus;
 	CdbPathLocus group_locus;
@@ -628,7 +709,16 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	/* add SplitTupleId into pathtarget */
 	input_target = copy_pathtarget(input_target);
 	SplitTupleId *stid = makeNode(SplitTupleId);
-	add_column_to_pathtarget(input_target, (Expr *)stid, 0);
+	add_column_to_pathtarget(input_target, (Expr *)stid, maxref);
+
+	Oid eqop;
+	bool hashable;
+	get_sort_group_operators(INT4OID, false, true, false, NULL, &eqop, NULL, &hashable);
+
+	SortGroupClause *sortcl = makeNode(SortGroupClause);
+	sortcl->tleSortGroupRef = maxref;
+	sortcl->hashable = hashable;
+	sortcl->eqop = eqop;
 
 
 	path = (Path *) create_agg_path(root,
@@ -656,6 +746,9 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	if(distinct_need_redistribute)
 	path = cdbpath_create_motion_path(root, path, NIL, false,
 	                                  distinct_locus);
+
+	dqa_group_clause = list_copy(dqa_group_clause);
+	dqa_group_clause = lappend(dqa_group_clause, sortcl);
 
 	path = (Path *) create_agg_path(root,
 	                                output_rel,

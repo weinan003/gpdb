@@ -204,7 +204,7 @@
 #include "cdb/cdbexplain.h"
 #include "cdb/cdbvars.h" /* mpp_hybrid_hash_agg */
 
-#define IS_HASHAGG(aggstate) (((Agg *) (aggstate)->ss.ps.plan)->aggstrategy == AGG_HASHED)
+#define IS_HASHAGG(aggstate) ((((Agg *) (aggstate)->ss.ps.plan)->aggstrategy == AGG_HASHED) || (((Agg *) (aggstate)->ss.ps.plan)->aggstrategy == AGG_SPLITORDER))
 
 /*
  * AggStatePerTransData - per aggregate state value information
@@ -1502,7 +1502,8 @@ finalize_aggregates(AggState *aggstate,
 	int			transno;
 
 	Assert(currentSet == 0 ||
-		   ((Agg *) aggstate->ss.ps.plan)->aggstrategy != AGG_HASHED);
+		   ((Agg *) aggstate->ss.ps.plan)->aggstrategy != AGG_HASHED ||
+		   ((Agg *) aggstate->ss.ps.plan)->aggstrategy != AGG_SPLITORDER);
 
 	aggstate->current_set = currentSet;
 
@@ -1520,6 +1521,7 @@ finalize_aggregates(AggState *aggstate,
 		if (pertrans->numSortCols > 0)
 		{
 			Assert(((Agg *) aggstate->ss.ps.plan)->aggstrategy != AGG_HASHED);
+			Assert(((Agg *) aggstate->ss.ps.plan)->aggstrategy != AGG_SPLITORDER);
 
 			if (pertrans->numInputs == 1)
 				process_ordered_aggregate_single(aggstate,
@@ -1752,6 +1754,7 @@ ExecAgg(AggState *node)
 		switch (node->phase->aggnode->aggstrategy)
 		{
 			case AGG_HASHED:
+			case AGG_SPLITORDER:
 				if (node->hhashtable == NULL)
 					agg_fill_hash_table(node);
 				result = agg_retrieve_hash_table(node);
@@ -2315,6 +2318,7 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 	if (node->groupingSets)
 	{
 		Assert(node->aggstrategy != AGG_HASHED);
+		Assert(node->aggstrategy != AGG_SPLITORDER);
 
 		numGroupingSets = list_length(node->groupingSets);
 
@@ -2531,7 +2535,7 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 	 * Hashing can only appear in the initial phase.
 	 */
 
-	if (node->aggstrategy == AGG_HASHED)
+	if (node->aggstrategy == AGG_HASHED || node->aggstrategy == AGG_SPLITORDER)
 		execTuplesHashPrepare(node->numCols,
 							  node->grpOperators,
 							  &aggstate->phases[0].eqfunctions,
@@ -2892,6 +2896,11 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 		ReleaseSysCache(aggTuple);
 	}
 
+	if(node->aggstrategy == AGG_SPLITORDER)
+	{
+
+	}
+
 	/*
 	 * Update numaggs to match the number of unique aggregates found. Also set
 	 * numstates to the number of unique aggregate states found.
@@ -3171,6 +3180,7 @@ build_pertrans_for_aggref(AggStatePerTrans pertrans,
 		 * (yet)
 		 */
 		Assert(((Agg *) aggstate->ss.ps.plan)->aggstrategy != AGG_HASHED);
+		Assert(((Agg *) aggstate->ss.ps.plan)->aggstrategy != AGG_SPLITORDER);
 
 		/* If we have only one input, we need its len/byval info. */
 		if (numInputs == 1)

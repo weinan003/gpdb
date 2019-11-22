@@ -3086,15 +3086,4 @@ typedef struct PartitionSelectorState
 	ProjectionInfo *partTabProj;
 } PartitionSelectorState;
 
-/* ----------------
- *		SplitTupleIdExpr node
- *
- * ----------------
- */
-typedef struct SplitTupleIdExprState
-{
-	ExprState	xprstate;
-	int         id;
-} SplitTupleIdExprState;
-
 #endif   /* EXECNODES_H */

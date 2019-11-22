@@ -217,7 +217,7 @@ static Datum ExecEvalPartListNullTestExpr(PartListNullTestExprState *exprstate,
 							ExprContext *econtext,
 							bool *isNull, ExprDoneCond *isDone);
 static Datum
-ExecEvalSplitTupleIdExpr(SplitTupleIdExprState *gstate,
+ExecEvalSplitTupleIdExpr(ExprState *gstate,
                          ExprContext *econtext,
                          bool *isNull,
                          ExprDoneCond *isDone);
@@ -6160,8 +6160,17 @@ ExecInitExpr(Expr *node, PlanState *parent)
 			}
 			break;
 		case T_SplitTupleId:
+		{
+
+			Insist(parent && IsA(parent, AggState));
+			AggState *aggState = (AggState *)parent;
+
 			state = (ExprState *) makeNode(ExprState);
+			SplitTupleId* tupleId = (SplitTupleId *)node;
+			tupleId->sid = 0;
+			tupleId->totalSplitNum = 2;
 			state->evalfunc = (ExprStateEvalFunc) ExecEvalSplitTupleIdExpr;
+		}
 			break;
 
 		default:
@@ -6819,15 +6828,25 @@ isJoinExprNull(List *joinExpr, ExprContext *econtext)
 }
 
 static Datum
-ExecEvalSplitTupleIdExpr(SplitTupleIdExprState *gstate,
+ExecEvalSplitTupleIdExpr(ExprState *gstate,
                          ExprContext *econtext,
                          bool *isNull,
                          ExprDoneCond *isDone)
 {
+	Datum datum;
+
+	SplitTupleId *stid = (SplitTupleId *)gstate->expr;
+
+	datum = Int32GetDatum(stid->sid++);
+
+	stid->sid = stid->sid + 1 < stid->totalSplitNum ?
+			stid->sid + 1 :
+			0;
+
 	if (isDone)
 		*isDone = ExprSingleResult;
 
 	*isNull = false;
 
-	return Int32GetDatum(gstate->id);
+	return datum;
 }
