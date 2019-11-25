@@ -408,6 +408,8 @@ _outAgg(StringInfo str, Agg *node)
 	WRITE_NODE_FIELD(groupingSets);
 	WRITE_NODE_FIELD(chain);
 	WRITE_BOOL_FIELD(streaming);
+	WRITE_INT_FIELD(numDisCols);
+	WRITE_INT_ARRAY(distColIdx, node->numDisCols, AttrNumber);
 }
 
 static void

@@ -1788,6 +1788,17 @@ create_agg_plan(PlannerInfo *root, AggPath *best_path)
 
 	plan->plan.flow = copyObject(subplan->flow);
 
+	int i;
+	int j = 0;
+	plan->numDisCols = best_path->dqas_num;
+	plan->distColIdx = palloc0(sizeof(Index) * plan->numDisCols);
+	while ((i = bms_first_member(best_path->dqas_ref_bm)) >= 0)
+	{
+		TargetEntry *te = get_sortgroupref_tle((Index )i, subplan->targetlist);
+		plan->distColIdx[j] = te->resno;
+		j ++;
+	}
+
 	return plan;
 }
 

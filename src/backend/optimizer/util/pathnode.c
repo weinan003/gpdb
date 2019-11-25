@@ -4093,6 +4093,35 @@ create_agg_path(PlannerInfo *root,
 	return pathnode;
 }
 
+AggPath *create_split_agg_path(PlannerInfo *root,
+                               RelOptInfo *rel,
+                               Path *subpath,
+                               PathTarget *target,
+                               AggStrategy aggstrategy,
+                               AggSplit aggsplit,
+                               bool streaming,
+                               List *groupClause,
+                               List *qual,
+                               const AggClauseCosts *aggcosts,
+                               double numGroups,
+                               struct HashAggTableSizes *hash_info,
+                               Bitmapset *dqas_ref_bm,
+                               int dqas_num)
+{
+	AggPath *apath = create_agg_path(root, rel, subpath,
+	                                 target, aggstrategy, aggsplit,
+	                                 streaming, groupClause, qual,
+	                                 aggcosts, numGroups, hash_info);
+
+	apath->dqas_ref_bm = bms_copy(dqas_ref_bm);
+	apath->dqas_num = dqas_num;
+
+	/* If the tuples are split, they are not distributed as before. */
+	CdbPathLocus_MakeStrewn(&apath->path.locus, subpath->locus.numsegments);
+
+	return apath;
+}
+
 /*
  * create_groupingsets_path
  *	  Creates a pathnode that represents performing GROUPING SETS aggregation

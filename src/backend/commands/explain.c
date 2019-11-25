@@ -2545,6 +2545,12 @@ show_agg_keys(AggState *astate, List *ancestors,
 {
 	Agg		   *plan = (Agg *) astate->ss.ps.plan;
 
+	if(plan->numDisCols)
+		show_sort_group_keys(outerPlanState(astate), "Split by Col",
+		                     plan->numDisCols, plan->distColIdx,
+		                     NULL, NULL, NULL,
+		                     ancestors, es);
+
 	if (plan->numCols > 0 || plan->groupingSets)
 	{
 		/* The key columns refer to the tlist of the child plan */

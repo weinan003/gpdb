@@ -1167,6 +1167,8 @@ _copyAgg(const Agg *from)
 	COPY_NODE_FIELD(groupingSets);
 	COPY_NODE_FIELD(chain);
 	COPY_SCALAR_FIELD(streaming);
+	COPY_SCALAR_FIELD(numDisCols);
+	COPY_POINTER_FIELD(distColIdx, from->numDisCols * sizeof(AttrNumber));
 
 	return newnode;
 }

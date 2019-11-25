@@ -3082,6 +3082,8 @@ _readAgg(void)
 	READ_NODE_FIELD(groupingSets);
 	READ_NODE_FIELD(chain);
 	READ_BOOL_FIELD(streaming);
+	READ_INT_FIELD(numDisCols);
+	READ_ATTRNUMBER_ARRAY(distColIdx, local_node->numDisCols);
 
 	READ_DONE();
 }
