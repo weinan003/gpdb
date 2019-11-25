@@ -6164,11 +6164,12 @@ ExecInitExpr(Expr *node, PlanState *parent)
 
 			Insist(parent && IsA(parent, AggState));
 			AggState *aggState = (AggState *)parent;
+			Agg* plan = (Agg *)aggState->ss.ps.plan;
 
 			state = (ExprState *) makeNode(ExprState);
 			SplitTupleId* tupleId = (SplitTupleId *)node;
 			tupleId->sid = 0;
-			tupleId->totalSplitNum = 2;
+			tupleId->totalSplitNum = plan->numDisCols;
 			state->evalfunc = (ExprStateEvalFunc) ExecEvalSplitTupleIdExpr;
 		}
 			break;
@@ -6839,7 +6840,7 @@ ExecEvalSplitTupleIdExpr(ExprState *gstate,
 
 	datum = Int32GetDatum(stid->sid++);
 
-	stid->sid = stid->sid + 1 < stid->totalSplitNum ?
+	stid->sid = stid->sid < stid->totalSplitNum ?
 			stid->sid + 1 :
 			0;
 
