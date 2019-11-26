@@ -1779,18 +1779,15 @@ static TupleTableSlot *
 split_order_agg_retrieve_direct(AggState  *node)
 {
 	ExprContext *econtext;
-	TupleTableSlot *outerslot = NULL;
+	static int idx = 0;
+	static TupleTableSlot *outerslot = NULL;
+	static bool *isnull_orig;
+	static Bitmapset *grpbySet = NULL;
 	TupleTableSlot *result;
 	econtext = node->ss.ps.ps_ExprContext;
+	Agg *plan = (Agg *)node->ss.ps.plan;
+
 #if 0
-	Agg *plan = node->ss.ps.plan;
-
-	plan->numDisCols;
-	plan->distColIdx;
-
-	plan->numCols;
-	plan->grpColIdx;
-
 	/*
 	 * 0.查有没有池化的slot,如果有直接做3
 	 *
@@ -1802,23 +1799,49 @@ split_order_agg_retrieve_direct(AggState  *node)
 	 *
 	 * 4. 做projection，存到另外一个TupleTableSlot上，返回
 	 *
-	 *
 	 */
 #endif
+	if (!outerslot) {
+		outerslot = fetch_input_tuple(node);
 
-	outerslot = fetch_input_tuple(node);
+		if(TupIsNull(outerslot))
+		{
+			node->agg_done = TRUE;
+			return NULL;
+		}
+
+		isnull_orig = (bool*)palloc0(sizeof(bool) * outerslot->PRIVATE_tts_nvalid);
+		memcpy(isnull_orig, outerslot->PRIVATE_tts_isnull, outerslot->PRIVATE_tts_nvalid);
+
+		for(int keyno = 0; keyno < plan->numCols; keyno++)
+		{
+			bms_add_member(grpbySet,plan->grpColIdx[keyno]);
+		}
+	}
+
+	bool *isnull= palloc0(sizeof(bool) * outerslot->PRIVATE_tts_nvalid);
+	memcpy(isnull, isnull_orig, outerslot->PRIVATE_tts_nvalid);
+	if (idx < plan->numDisCols)
+	{
+		if(!bms_is_member(plan->distColIdx[idx],grpbySet))
+			isnull[plan->distColIdx[idx] - 1] = true;
+		idx ++;
+	}
+
+	outerslot->PRIVATE_tts_isnull = isnull;
 
 	econtext->ecxt_outertuple = outerslot;
 
-	if(TupIsNull(outerslot))
-	{
-		node->agg_done = TRUE;
-
-		return NULL;
-
-	}
 	ResetExprContext(econtext);
 	result = project_aggregates(node);
+
+	if (idx == plan->numDisCols) {
+		outerslot = NULL;
+		idx = 0;
+		isnull_orig = NULL;
+		bms_free(grpbySet);
+		grpbySet = NULL;
+	}
 
 	return result;
 #if 0
@@ -1842,7 +1865,6 @@ split_order_agg_retrieve_direct(AggState  *node)
 	}
 	3.遍历distColIdx，当前列赋值
 #endif
-
 }
 
 /*
