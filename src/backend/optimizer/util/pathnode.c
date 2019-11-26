@@ -4097,11 +4097,7 @@ AggPath *create_split_agg_path(PlannerInfo *root,
                                RelOptInfo *rel,
                                Path *subpath,
                                PathTarget *target,
-                               AggStrategy aggstrategy,
-                               AggSplit aggsplit,
-                               bool streaming,
                                List *groupClause,
-                               List *qual,
                                const AggClauseCosts *aggcosts,
                                double numGroups,
                                struct HashAggTableSizes *hash_info,
@@ -4109,8 +4105,8 @@ AggPath *create_split_agg_path(PlannerInfo *root,
                                int dqas_num)
 {
 	AggPath *apath = create_agg_path(root, rel, subpath,
-	                                 target, aggstrategy, aggsplit,
-	                                 streaming, groupClause, qual,
+	                                 target, AGG_SPLITORDER, AGGSPLIT_SIMPLE,
+	                                 true, groupClause, NIL,
 	                                 aggcosts, numGroups, hash_info);
 
 	apath->dqas_ref_bm = bms_copy(dqas_ref_bm);

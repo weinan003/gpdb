@@ -220,10 +220,8 @@ cdb_create_twostage_grouping_paths(PlannerInfo *root,
 				break;
 			case MULTIDQAS:
 			{
-#if 0
-				CdbPathLocus distinct_locus;
+#if 1
 				CdbPathLocus group_locus;
-				bool		distinct_need_redistribute;
 				bool        group_need_redistribute;
 				Path*       path = cheapest_path;
 
@@ -234,52 +232,50 @@ cdb_create_twostage_grouping_paths(PlannerInfo *root,
 				                      false,	/* force */
 				                      &hash_info);
 
-				path = (Path *) create_projection_path(root, path->parent, path, input_target);
+				path = (Path *) create_projection_path(root, path->parent, path, info.input_target);
 
+
+				/* add SplitTupleId into pathtarget */
+#if 0
+				{
+					info.input_target = copy_pathtarget(info.input_target);
+					SplitTupleId *stid = makeNode(SplitTupleId);
+					add_column_to_pathtarget(info.input_target, (Expr *)stid, ++info.maxref);
+				}
+
+				/* add SplitTupleId into groupby clause */
+				{
+					Oid eqop;
+					bool hashable;
+					get_sort_group_operators(INT4OID, false, true, false, NULL, &eqop, NULL, &hashable);
+
+					SortGroupClause *sortcl = makeNode(SortGroupClause);
+					sortcl->tleSortGroupRef = info.maxref;
+					sortcl->hashable = hashable;
+					sortcl->eqop = eqop;
+
+					info.dqa_group_clause = lappend(info.dqa_group_clause, sortcl);
+				}
+#endif
 				group_locus = cdb_choose_grouping_locus(root, path,
-				                                        input_target,
+				                                        info.input_target,
 				                                        root->parse->groupClause, NIL, NIL,
 				                                        &group_need_redistribute);
 
-				distinct_locus = cdb_choose_grouping_locus(root, path,
-				                                           input_target,
-				                                           dqa_group_clause, NIL, NIL,
-				                                           &distinct_need_redistribute);
-
-				/* add SplitTupleId into pathtarget */
-				input_target = copy_pathtarget(input_target);
-				SplitTupleId *stid = makeNode(SplitTupleId);
-				add_column_to_pathtarget(input_target, (Expr *)stid, 0);
-
-				path = (Path *) create_agg_path(root,
-				                                output_rel,
-				                                path,
-				                                input_target,
-				                                AGG_SPLITORDER,
-				                                AGGSPLIT_SIMPLE,
-				                                false, /* streaming */
-				                                dqa_group_clause,
-				                                NIL,
-				                                cxt.agg_partial_costs, /* FIXME */
-				                                cxt.dNumGroups * getgpsegmentCount(),
-				                                &hash_info);
+				path = (Path *) create_split_agg_path(root,
+				                                      output_rel,
+				                                      path,
+				                                      info.input_target,
+				                                      info.dqa_group_clause,
+				                                      cxt.agg_partial_costs, /* FIXME */
+				                                      cxt.dNumGroups * getgpsegmentCount(),
+				                                      &hash_info,
+				                                      info.dqas_ref_bm,
+				                                      info.dqas_num);
 
 				if (group_need_redistribute)
 					path = cdbpath_create_motion_path(root, path, NIL, false,
 					                                  group_locus);
-
-				path = (Path *) create_agg_path(root,
-				                                output_rel,
-				                                path,
-				                                cxt.target,
-				                                parse->groupClause ? AGG_HASHED : AGG_PLAIN,
-				                                AGGSPLIT_DEDUPLICATED,
-				                                false, /* streaming */
-				                                parse->groupClause,
-				                                (List *) parse->havingQual,
-				                                cxt.agg_final_costs,
-				                                cxt.dNumGroups,
-				                                &hash_info);
 
 				add_path(output_rel, path);
 
@@ -288,7 +284,7 @@ cdb_create_twostage_grouping_paths(PlannerInfo *root,
 				 */
 #endif
 
-#if 1
+#if 0
 				add_multi_dqas_hash_agg_path(root,
 				                            cheapest_path,
 				                            &cxt,
@@ -757,11 +753,7 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	                                output_rel,
 	                                path,
 	                                info->input_target,
-	                                AGG_SPLITORDER,
-	                                AGGSPLIT_SIMPLE,
-	                                true, /* streaming */
-	                                root->parse->groupClause,
-	                                NIL,
+	                                info->dqa_group_clause, /* replace GROUP BY to easy used hash agg executor */
 	                                cxt->agg_partial_costs, /* FIXME */
 	                                cxt->dNumGroups * getgpsegmentCount(),
 	                                &hash_info,
