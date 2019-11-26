@@ -203,6 +203,7 @@
 
 #include "cdb/cdbexplain.h"
 #include "cdb/cdbvars.h" /* mpp_hybrid_hash_agg */
+#include "parser/parsetree.h"
 
 #define IS_HASHAGG(aggstate) ((((Agg *) (aggstate)->ss.ps.plan)->aggstrategy == AGG_HASHED) || (((Agg *) (aggstate)->ss.ps.plan)->aggstrategy == AGG_SPLITORDER))
 
@@ -259,6 +260,7 @@ static TupleTableSlot *project_aggregates(AggState *aggstate);
 static Bitmapset *find_unaggregated_cols(AggState *aggstate);
 static bool find_unaggregated_cols_walker(Node *node, Bitmapset **colnos);
 static TupleTableSlot *agg_retrieve_direct(AggState *aggstate);
+static TupleTableSlot *split_order_agg_retrieve_direct(AggState  *node);
 static void agg_fill_hash_table(AggState *aggstate);
 static TupleTableSlot *agg_retrieve_hash_table(AggState *aggstate);
 static void ExecAggExplainEnd(PlanState *planstate, struct StringInfoData *buf);
@@ -1754,10 +1756,12 @@ ExecAgg(AggState *node)
 		switch (node->phase->aggnode->aggstrategy)
 		{
 			case AGG_HASHED:
-			case AGG_SPLITORDER:
 				if (node->hhashtable == NULL)
 					agg_fill_hash_table(node);
 				result = agg_retrieve_hash_table(node);
+				break;
+			case AGG_SPLITORDER:
+				result = split_order_agg_retrieve_direct(node);
 				break;
 			default:
 				result = agg_retrieve_direct(node);
@@ -1769,6 +1773,76 @@ ExecAgg(AggState *node)
 	}
 
 	return NULL;
+}
+
+static TupleTableSlot *
+split_order_agg_retrieve_direct(AggState  *node)
+{
+	ExprContext *econtext;
+	TupleTableSlot *outerslot = NULL;
+	TupleTableSlot *result;
+	econtext = node->ss.ps.ps_ExprContext;
+#if 0
+	Agg *plan = node->ss.ps.plan;
+
+	plan->numDisCols;
+	plan->distColIdx;
+
+	plan->numCols;
+	plan->grpColIdx;
+
+	/*
+	 * 0.查有没有池化的slot,如果有直接做3
+	 *
+	 * 1. 如果scan 出的是memtuple， 且没生成过，就生成 tupledescription
+	 *
+	 * 2. 将scan出的tuple转换成virtual tuple 并池化
+	 *
+	 * 3. 按照distColIdx 制空某些 列
+	 *
+	 * 4. 做projection，存到另外一个TupleTableSlot上，返回
+	 *
+	 *
+	 */
+#endif
+
+	outerslot = fetch_input_tuple(node);
+
+	econtext->ecxt_outertuple = outerslot;
+
+	if(TupIsNull(outerslot))
+	{
+		node->agg_done = TRUE;
+
+		return NULL;
+
+	}
+	ResetExprContext(econtext);
+	result = project_aggregates(node);
+
+	return result;
+#if 0
+	slot_getallattrs(outerslot);
+
+	置空的条件：
+	遍历numDisCols，只保留当前迭代出来的列，其余列，如果没有在grpColIdx中，则置空
+
+	1.都置空
+	ExecSetSlotDescriptor(aggstate->hashslot, outerslot->tts_tupleDescriptor);
+	ExecStoreAllNullTuple(aggstate->hashslot);
+
+	2. 将grpColIdx中的 赋值
+	plan->numDisCols;
+	for (int keyno = 0; keyno < plan->numCols; keyno++) {
+		/* find key expression in tlist */
+		AttrNumber keyresno = plan->grpColIdx[keyno];
+		TargetEntry *target = get_tle_by_resno(plan->plan.targetlist,
+		                                       keyresno);
+		target.
+	}
+	3.遍历distColIdx，当前列赋值
+#endif
+
 }
 
 /*

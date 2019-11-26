@@ -266,7 +266,7 @@ cdb_create_twostage_grouping_paths(PlannerInfo *root,
 				                                      output_rel,
 				                                      path,
 				                                      info.input_target,
-				                                      info.dqa_group_clause,
+				                                      root->parse->groupClause,
 				                                      cxt.agg_partial_costs, /* FIXME */
 				                                      cxt.dNumGroups * getgpsegmentCount(),
 				                                      &hash_info,
@@ -753,7 +753,7 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	                                output_rel,
 	                                path,
 	                                info->input_target,
-	                                info->dqa_group_clause, /* replace GROUP BY to easy used hash agg executor */
+	                                root->parse->groupClause,
 	                                cxt->agg_partial_costs, /* FIXME */
 	                                cxt->dNumGroups * getgpsegmentCount(),
 	                                &hash_info,

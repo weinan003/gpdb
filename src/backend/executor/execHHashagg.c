@@ -948,7 +948,7 @@ agg_hash_initial_pass(AggState *aggstate)
 			int size;
 							
 			/* Initialize hashslot by cloning input slot. */
-			ExecSetSlotDescriptor(aggstate->hashslot, outerslot->tts_tupleDescriptor); 
+			ExecSetSlotDescriptor(aggstate->hashslot, outerslot->tts_tupleDescriptor);
 			ExecStoreAllNullTuple(aggstate->hashslot);
 
 			size = ((Agg *)aggstate->ss.ps.plan)->numCols * sizeof(HashKey);
