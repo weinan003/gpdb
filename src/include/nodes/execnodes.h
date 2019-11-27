@@ -2641,6 +2641,12 @@ typedef enum HashAggStatus
 	HASHAGG_END_OF_PASSES
 } HashAggStatus;
 
+typedef struct SplitAggInfo
+{
+	int             idx;
+	TupleTableSlot  *outerslot;
+}SplitAggInfo;
+
 typedef struct AggState
 {
 	ScanState	ss;				/* its first field is NodeTag */
@@ -2704,6 +2710,10 @@ typedef struct AggState
 	 * which an Agg's target list usually has.
 	 */
 	bool		ps_TupFromTlist;
+
+	bool            *isnull_orig;
+	Bitmapset       *grpbySet;
+	SplitAggInfo   s_agg_info;
 } AggState;
 
 /* ----------------

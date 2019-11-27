@@ -175,6 +175,7 @@
  *-------------------------------------------------------------------------
  */
 
+#include <string.h>
 #include "postgres.h"
 
 #include "access/htup_details.h"
@@ -205,7 +206,7 @@
 #include "cdb/cdbvars.h" /* mpp_hybrid_hash_agg */
 #include "parser/parsetree.h"
 
-#define IS_HASHAGG(aggstate) ((((Agg *) (aggstate)->ss.ps.plan)->aggstrategy == AGG_HASHED) || (((Agg *) (aggstate)->ss.ps.plan)->aggstrategy == AGG_SPLITORDER))
+#define IS_HASHAGG(aggstate) ((((Agg *) (aggstate)->ss.ps.plan)->aggstrategy == AGG_HASHED))
 
 /*
  * AggStatePerTransData - per aggregate state value information
@@ -1779,58 +1780,47 @@ static TupleTableSlot *
 split_order_agg_retrieve_direct(AggState  *node)
 {
 	ExprContext *econtext;
-	static int idx = 0;
-	static TupleTableSlot *outerslot = NULL;
-	static bool *isnull_orig;
-	static Bitmapset *grpbySet = NULL;
+	SplitAggInfo    *s_agg_info_p = &node->s_agg_info;
 	TupleTableSlot *result;
 	econtext = node->ss.ps.ps_ExprContext;
 	Agg *plan = (Agg *)node->ss.ps.plan;
 
-	if (!outerslot) {
-		outerslot = fetch_input_tuple(node);
+	if (s_agg_info_p->idx == 0) {
+		s_agg_info_p->outerslot = fetch_input_tuple(node);
 
-		if(TupIsNull(outerslot))
+		if(TupIsNull(s_agg_info_p->outerslot))
 		{
 			node->agg_done = TRUE;
 			return NULL;
 		}
 
 		/* translate to virtual tuple */
-		slot_getallattrs(outerslot);
+		slot_getallattrs(s_agg_info_p->outerslot);
 
-		isnull_orig = (bool*)palloc0(sizeof(bool) * outerslot->PRIVATE_tts_nvalid);
-		memcpy(isnull_orig, outerslot->PRIVATE_tts_isnull, outerslot->PRIVATE_tts_nvalid);
+		/* store original tupleslot isnull array */
+		memcpy(node->isnull_orig, s_agg_info_p->outerslot->PRIVATE_tts_isnull,
+				s_agg_info_p->outerslot->PRIVATE_tts_nvalid);
 
-		for(int keyno = 0; keyno < plan->numCols; keyno++)
-		{
-			bms_add_member(grpbySet,plan->grpColIdx[keyno]);
-		}
 	}
 
-	bool *isnull= palloc0(sizeof(bool) * outerslot->PRIVATE_tts_nvalid);
-	memcpy(isnull, isnull_orig, outerslot->PRIVATE_tts_nvalid);
-	if (idx < plan->numDisCols)
+	/* reset isnull */
+	bool *isnull = s_agg_info_p->outerslot->PRIVATE_tts_isnull;
+	memcpy(isnull, node->isnull_orig, s_agg_info_p->outerslot->PRIVATE_tts_nvalid);
+
+	/* populate isnull if the column belone to other distinct and is not a group by */
+	if (s_agg_info_p->idx < plan->numDisCols)
 	{
-		if(!bms_is_member(plan->distColIdx[idx],grpbySet))
-			isnull[plan->distColIdx[idx] - 1] = true;
-		idx ++;
+		if(!bms_is_member(plan->distColIdx[s_agg_info_p->idx], node->grpbySet))
+			isnull[plan->distColIdx[s_agg_info_p->idx] - 1] = true;
+
+		s_agg_info_p->idx = (s_agg_info_p->idx + 1) % plan->numDisCols;
 	}
 
-	outerslot->PRIVATE_tts_isnull = isnull;
-
-	econtext->ecxt_outertuple = outerslot;
-
+	s_agg_info_p->outerslot->PRIVATE_tts_isnull = isnull;
+	econtext->ecxt_outertuple = s_agg_info_p->outerslot;
 	ResetExprContext(econtext);
-	result = project_aggregates(node);
 
-	if (idx == plan->numDisCols) {
-		outerslot = NULL;
-		idx = 0;
-		isnull_orig = NULL;
-		bms_free(grpbySet);
-		grpbySet = NULL;
-	}
+	result = project_aggregates(node);
 
 	return result;
 }
@@ -2599,7 +2589,7 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 	 * Hashing can only appear in the initial phase.
 	 */
 
-	if (node->aggstrategy == AGG_HASHED || node->aggstrategy == AGG_SPLITORDER)
+	if (node->aggstrategy == AGG_HASHED)
 		execTuplesHashPrepare(node->numCols,
 							  node->grpOperators,
 							  &aggstate->phases[0].eqfunctions,
@@ -2626,7 +2616,7 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 	aggstate->peragg = peraggs;
 	aggstate->pertrans = pertransstates;
 
-	if (node->aggstrategy == AGG_HASHED || node->aggstrategy == AGG_SPLITORDER)
+	if (node->aggstrategy == AGG_HASHED)
 	{
 		aggstate->hash_needed = find_hash_columns(aggstate);
 	}
@@ -2962,7 +2952,12 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 
 	if(node->aggstrategy == AGG_SPLITORDER)
 	{
+		for(int keyno = 0; keyno < node->numCols; keyno++)
+		{
+			bms_add_member(aggstate->grpbySet, node->grpColIdx[keyno]);
+		}
 
+		aggstate->isnull_orig = (bool *) palloc0(sizeof(bool) * list_length(node->plan.targetlist));
 	}
 
 	/*
@@ -3761,6 +3756,13 @@ ExecEagerFreeAgg(AggState *node)
 			node->hashslot->tts_tupleDescriptor = NULL;
 		}
 	}
+
+	if(((Agg *)node->ss.ps.plan)->aggstrategy == AGG_SPLITORDER)
+	{
+		bms_free(node->grpbySet);
+		pfree(node->isnull_orig);
+	}
+
 
 	/*
 	 * We don't need to ReScanExprContext the output tuple context here;

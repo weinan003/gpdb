@@ -6838,11 +6838,9 @@ ExecEvalSplitTupleIdExpr(ExprState *gstate,
 
 	SplitTupleId *stid = (SplitTupleId *)gstate->expr;
 
-	datum = Int32GetDatum(stid->sid++);
+	datum = Int32GetDatum(stid->sid);
 
-	stid->sid = stid->sid < stid->totalSplitNum ?
-			stid->sid + 1 :
-			0;
+	stid->sid = (stid->sid + 1) % stid->totalSplitNum;
 
 	if (isDone)
 		*isDone = ExprSingleResult;
