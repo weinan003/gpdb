@@ -220,7 +220,7 @@ cdb_create_twostage_grouping_paths(PlannerInfo *root,
 				break;
 			case MULTIDQAS:
 			{
-#if 1
+#if 0
 				CdbPathLocus group_locus;
 				bool        group_need_redistribute;
 				Path*       path = cheapest_path;
@@ -234,29 +234,6 @@ cdb_create_twostage_grouping_paths(PlannerInfo *root,
 
 				path = (Path *) create_projection_path(root, path->parent, path, info.input_target);
 
-
-				/* add SplitTupleId into pathtarget */
-#if 0
-				{
-					info.input_target = copy_pathtarget(info.input_target);
-					SplitTupleId *stid = makeNode(SplitTupleId);
-					add_column_to_pathtarget(info.input_target, (Expr *)stid, ++info.maxref);
-				}
-
-				/* add SplitTupleId into groupby clause */
-				{
-					Oid eqop;
-					bool hashable;
-					get_sort_group_operators(INT4OID, false, true, false, NULL, &eqop, NULL, &hashable);
-
-					SortGroupClause *sortcl = makeNode(SortGroupClause);
-					sortcl->tleSortGroupRef = info.maxref;
-					sortcl->hashable = hashable;
-					sortcl->eqop = eqop;
-
-					info.dqa_group_clause = lappend(info.dqa_group_clause, sortcl);
-				}
-#endif
 				group_locus = cdb_choose_grouping_locus(root, path,
 				                                        info.input_target,
 				                                        root->parse->groupClause, NIL, NIL,
@@ -284,7 +261,7 @@ cdb_create_twostage_grouping_paths(PlannerInfo *root,
 				 */
 #endif
 
-#if 0
+#if 1
 				add_multi_dqas_hash_agg_path(root,
 				                            cheapest_path,
 				                            &cxt,

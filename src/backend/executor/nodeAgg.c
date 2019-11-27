@@ -1787,20 +1787,6 @@ split_order_agg_retrieve_direct(AggState  *node)
 	econtext = node->ss.ps.ps_ExprContext;
 	Agg *plan = (Agg *)node->ss.ps.plan;
 
-#if 0
-	/*
-	 * 0.查有没有池化的slot,如果有直接做3
-	 *
-	 * 1. 如果scan 出的是memtuple， 且没生成过，就生成 tupledescription
-	 *
-	 * 2. 将scan出的tuple转换成virtual tuple 并池化
-	 *
-	 * 3. 按照distColIdx 制空某些 列
-	 *
-	 * 4. 做projection，存到另外一个TupleTableSlot上，返回
-	 *
-	 */
-#endif
 	if (!outerslot) {
 		outerslot = fetch_input_tuple(node);
 
@@ -1809,6 +1795,9 @@ split_order_agg_retrieve_direct(AggState  *node)
 			node->agg_done = TRUE;
 			return NULL;
 		}
+
+		/* translate to virtual tuple */
+		slot_getallattrs(outerslot);
 
 		isnull_orig = (bool*)palloc0(sizeof(bool) * outerslot->PRIVATE_tts_nvalid);
 		memcpy(isnull_orig, outerslot->PRIVATE_tts_isnull, outerslot->PRIVATE_tts_nvalid);
@@ -1844,27 +1833,6 @@ split_order_agg_retrieve_direct(AggState  *node)
 	}
 
 	return result;
-#if 0
-	slot_getallattrs(outerslot);
-
-	置空的条件：
-	遍历numDisCols，只保留当前迭代出来的列，其余列，如果没有在grpColIdx中，则置空
-
-	1.都置空
-	ExecSetSlotDescriptor(aggstate->hashslot, outerslot->tts_tupleDescriptor);
-	ExecStoreAllNullTuple(aggstate->hashslot);
-
-	2. 将grpColIdx中的 赋值
-	plan->numDisCols;
-	for (int keyno = 0; keyno < plan->numCols; keyno++) {
-		/* find key expression in tlist */
-		AttrNumber keyresno = plan->grpColIdx[keyno];
-		TargetEntry *target = get_tle_by_resno(plan->plan.targetlist,
-		                                       keyresno);
-		target.
-	}
-	3.遍历distColIdx，当前列赋值
-#endif
 }
 
 /*
