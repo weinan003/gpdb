@@ -618,41 +618,35 @@ analyze_dqas(PlannerInfo *root,
 	}
 
 	/* Check all DISTINCT on single expr */
-	Index srtRf = 0;
-	foreach(lc, info->dqa_group_clause)
+	if (info->dqas_num > 1)
 	{
-		SortGroupClause * srtcl = lfirst(lc);
+		ret = MULTIDQAS;
 
-		if(srtRf == 0)
-			srtRf = srtcl->tleSortGroupRef;
-		else if(srtRf != srtcl->tleSortGroupRef)
+		/* Check that there are no non-DISTINCT aggregates mixed in. */
+		List *varnos = pull_var_clause((Node *) ctx->target->exprs,
+		                               PVC_INCLUDE_AGGREGATES |
+				                               PVC_INCLUDE_WINDOWFUNCS |
+				                               PVC_INCLUDE_PLACEHOLDERS);
+		foreach (lc, varnos)
 		{
-			ret = MULTIDQAS;
-			break;
-		}
-	}
+			Node	   *node = lfirst(lc);
 
-	/* Check that there are no non-DISTINCT aggregates mixed in. */
-	List *varnos = pull_var_clause((Node *) ctx->target->exprs,
-	                               PVC_INCLUDE_AGGREGATES |
-			                               PVC_INCLUDE_WINDOWFUNCS |
-			                               PVC_INCLUDE_PLACEHOLDERS);
-	foreach (lc, varnos)
-	{
-		Node	   *node = lfirst(lc);
-
-		if (IsA(node, Aggref))
-		{
-			Aggref	   *aggref = (Aggref *) node;
-
-			if (!aggref->aggdistinct)
+			if (IsA(node, Aggref))
 			{
-				/* mixing DISTINCT and non-DISTINCT aggs */
-				ret = MIXEDDQAS;
-				break;
+				Aggref	   *aggref = (Aggref *) node;
+
+				if (!aggref->aggdistinct)
+				{
+					/* mixing DISTINCT and non-DISTINCT aggs */
+					ret = MIXEDDQAS;
+					break;
+				}
 			}
 		}
 	}
+	else if (info->dqas_num < 1)
+		return INVALID;
+
 
 
 	info->input_target = input_target;
@@ -697,6 +691,7 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	 *                            -> input
 	 */
 	path = (Path *) create_projection_path(root, path->parent, path, info->input_target);
+	int numsegments = path->locus.numsegments;
 
 	group_locus = cdb_choose_grouping_locus(root, path,
 	                                        info->input_target,
@@ -708,7 +703,7 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	{
 		info->input_target = copy_pathtarget(info->input_target);
 		SplitTupleId *stid = makeNode(SplitTupleId);
-		add_column_to_pathtarget(info->input_target, (Expr *)stid, info->maxref);
+		add_column_to_pathtarget(info->input_target, (Expr *)stid, ++info->maxref);
 	}
 
 	/* add SplitTupleId into groupby clause */
@@ -738,6 +733,7 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	                                info->dqas_num);
 
 
+	CdbPathLocus_MakeStrewn(&path->locus, numsegments);
 	distinct_locus = cdb_choose_grouping_locus(root, path,
 	                                           info->input_target,
 	                                           info->dqa_group_clause, NIL, NIL,
