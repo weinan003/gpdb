@@ -519,7 +519,6 @@ analyze_dqas(PlannerInfo *root,
 		SortGroupClause *arg_sortcl;
 		SortGroupClause *sortcl = NULL;
 		TargetEntry *arg_tle;
-		int			idx;
 		ListCell   *lcc;
 
 		if (list_length(aggref->aggdistinct) != 1)
@@ -538,40 +537,16 @@ analyze_dqas(PlannerInfo *root,
 			return INVALID;
 		}
 
-		/* Now find this expression in the sub-path's target list */
-		idx = 0;
-		foreach(lcc, input_target->exprs)
-		{
-			Expr		*expr = lfirst(lcc);
+		add_column_to_pathtarget(input_target, arg_tle->expr, ++maxRef);
 
-			if (equal(expr, arg_tle->expr))
-				break;
-			idx++;
-		}
+		sortcl = copyObject(arg_sortcl);
+		sortcl->tleSortGroupRef = maxRef;
+		sortcl->hashable = true;	/* we verified earlier that it's hashable */
 
-		/* if DISTINCT expr is not contained in input_target add it in otherwise just reference it */
-		if (idx == list_length(input_target->exprs))
-			add_column_to_pathtarget(input_target, arg_tle->expr, ++maxRef);
-		else if (input_target->sortgrouprefs[idx] == 0)
-			input_target->sortgrouprefs[idx] = ++maxRef;
+		info->dqa_group_clause = lappend(info->dqa_group_clause, sortcl);
 
-		/* both side equal means, the expr is the first time reference */
-		if(input_target->sortgrouprefs[idx] == maxRef)
-		{
-			sortcl = copyObject(arg_sortcl);
-			sortcl->tleSortGroupRef = input_target->sortgrouprefs[idx];
-			sortcl->hashable = true;	/* we verified earlier that it's hashable */
-
-			info->dqa_group_clause = lappend(info->dqa_group_clause, sortcl);
-
-		}
-
-
-		if(!bms_is_member(input_target->sortgrouprefs[idx], info->dqas_ref_bm))
-		{
-			info->dqas_ref_bm = bms_add_member(info->dqas_ref_bm, input_target->sortgrouprefs[idx]);
-			info->dqas_num ++;
-		}
+		info->dqas_ref_bm = bms_add_member(info->dqas_ref_bm, maxRef);
+		info->dqas_num ++;
 	}
 
 	/* Check all DISTINCT on single expr */
