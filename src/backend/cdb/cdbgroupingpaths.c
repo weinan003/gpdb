@@ -220,54 +220,11 @@ cdb_create_twostage_grouping_paths(PlannerInfo *root,
 				break;
 			case MULTIDQAS:
 			{
-#if 0
-				CdbPathLocus group_locus;
-				bool        group_need_redistribute;
-				Path*       path = cheapest_path;
-
-				HashAggTableSizes hash_info;
-				calcHashAggTableSizes(work_mem * 1024L,
-				                      cxt.dNumGroups,
-				                      path->pathtarget->width,
-				                      false,	/* force */
-				                      &hash_info);
-
-				path = (Path *) create_projection_path(root, path->parent, path, info.input_target);
-
-				group_locus = cdb_choose_grouping_locus(root, path,
-				                                        info.input_target,
-				                                        root->parse->groupClause, NIL, NIL,
-				                                        &group_need_redistribute);
-
-				path = (Path *) create_split_agg_path(root,
-				                                      output_rel,
-				                                      path,
-				                                      info.input_target,
-				                                      root->parse->groupClause,
-				                                      cxt.agg_partial_costs, /* FIXME */
-				                                      cxt.dNumGroups * getgpsegmentCount(),
-				                                      &hash_info,
-				                                      info.dqas_ref_bm,
-				                                      info.dqas_num);
-
-				if (group_need_redistribute)
-					path = cdbpath_create_motion_path(root, path, NIL, false,
-					                                  group_locus);
-
-				add_path(output_rel, path);
-
-				/*
-				 * Comments just for debug split agg
-				 */
-#endif
-
-#if 1
 				add_multi_dqas_hash_agg_path(root,
 				                            cheapest_path,
 				                            &cxt,
 				                            output_rel,
 				                            &info);
-#endif
 			}
 			break;
 			case MIXEDDQAS:
@@ -750,7 +707,7 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	                                info->input_target,
 	                                AGG_HASHED,
 	                                AGGSPLIT_SIMPLE,
-	                                false, /* streaming */
+	                                true, /* streaming */
 	                                info->dqa_group_clause,
 	                                NIL,
 	                                cxt->agg_partial_costs, /* FIXME */

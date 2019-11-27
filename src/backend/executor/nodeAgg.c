@@ -1808,13 +1808,10 @@ split_order_agg_retrieve_direct(AggState  *node)
 	memcpy(isnull, node->isnull_orig, s_agg_info_p->outerslot->PRIVATE_tts_nvalid);
 
 	/* populate isnull if the column belone to other distinct and is not a group by */
-	if (s_agg_info_p->idx < plan->numDisCols)
-	{
-		if(!bms_is_member(plan->distColIdx[s_agg_info_p->idx], node->grpbySet))
-			isnull[plan->distColIdx[s_agg_info_p->idx] - 1] = true;
+	if(!bms_is_member(plan->distColIdx[s_agg_info_p->idx], node->grpbySet))
+		isnull[plan->distColIdx[s_agg_info_p->idx] - 1] = true;
 
-		s_agg_info_p->idx = (s_agg_info_p->idx + 1) % plan->numDisCols;
-	}
+	s_agg_info_p->idx = (s_agg_info_p->idx + 1) % plan->numDisCols;
 
 	s_agg_info_p->outerslot->PRIVATE_tts_isnull = isnull;
 	econtext->ecxt_outertuple = s_agg_info_p->outerslot;
@@ -2954,7 +2951,7 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 	{
 		for(int keyno = 0; keyno < node->numCols; keyno++)
 		{
-			bms_add_member(aggstate->grpbySet, node->grpColIdx[keyno]);
+			aggstate->grpbySet = bms_add_member(aggstate->grpbySet, node->grpColIdx[keyno]);
 		}
 
 		aggstate->isnull_orig = (bool *) palloc0(sizeof(bool) * list_length(node->plan.targetlist));
