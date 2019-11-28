@@ -468,6 +468,38 @@ strip_aggdistinct(PathTarget *target)
 	return result;
 }
 
+static bool
+is_reference_by_dqa(cdb_distinct_info *info,int i)
+{
+	ListCell *lc;
+	Index idx = info->input_target->sortgrouprefs[i];
+
+	foreach(lc, info->dqa_group_clause)
+	{
+		SortGroupClause *srtcl = lfirst(lc);
+		if(srtcl->tleSortGroupRef == idx)
+			return true;
+	}
+
+	return false;
+}
+
+static void
+add_dqa_expr(cdb_distinct_info *info, Expr *expr, SortGroupClause *arg_sortcl, int ref)
+{
+	SortGroupClause *sortcl;
+	add_column_to_pathtarget(info->input_target, expr, ref);
+
+	sortcl = copyObject(arg_sortcl);
+	sortcl->tleSortGroupRef = ref;
+	sortcl->hashable = true;	/* we verified earlier that it's hashable */
+
+	info->dqa_group_clause = lappend(info->dqa_group_clause, sortcl);
+
+	info->dqas_ref_bm = bms_add_member(info->dqas_ref_bm, ref);
+	info->dqas_num ++;
+
+}
 /*
  * analyze_dqas
  * fetch all mpp dqas path required information
@@ -492,23 +524,22 @@ analyze_dqas(PlannerInfo *root,
 			 cdb_distinct_info *info)
 {
 	DQATYPE     ret = SINGLEDQA;
-	PathTarget *input_target;
 	ListCell   *lc;
 	Index		maxRef;
 
 	/* Prepare a modifiable copy of the input path target */
-	input_target = copy_pathtarget(path->pathtarget);
+	info->input_target = copy_pathtarget(path->pathtarget);
 	maxRef = 0;
-	if (input_target->sortgrouprefs)
+	if (info->input_target->sortgrouprefs)
 	{
-		for (int idx = 0; idx < list_length(input_target->exprs); idx++)
+		for (int idx = 0; idx < list_length(info->input_target->exprs); idx++)
 		{
-			if (input_target->sortgrouprefs[idx] > maxRef)
-				maxRef = input_target->sortgrouprefs[idx];
+			if (info->input_target->sortgrouprefs[idx] > maxRef)
+				maxRef = info->input_target->sortgrouprefs[idx];
 		}
 	}
 	else
-		input_target->sortgrouprefs = (Index *) palloc0(list_length(input_target->exprs) * sizeof(Index));
+		info->input_target->sortgrouprefs = (Index *) palloc0(list_length(info->input_target->exprs) * sizeof(Index));
 
 	/* Analyze the DISTINCT argument, to see if it's something we can
 	 * support.
@@ -537,16 +568,55 @@ analyze_dqas(PlannerInfo *root,
 			return INVALID;
 		}
 
-		add_column_to_pathtarget(input_target, arg_tle->expr, ++maxRef);
+		int idx = 0;
 
-		sortcl = copyObject(arg_sortcl);
-		sortcl->tleSortGroupRef = maxRef;
-		sortcl->hashable = true;	/* we verified earlier that it's hashable */
+		Bitmapset *idSet = NULL;
+		foreach(lcc, info->input_target->exprs)
+		{
+			Expr		*expr = lfirst(lcc);
 
-		info->dqa_group_clause = lappend(info->dqa_group_clause, sortcl);
+			if (equal(expr, arg_tle->expr))
+				idSet = bms_add_member(idSet, idx);
 
-		info->dqas_ref_bm = bms_add_member(info->dqas_ref_bm, maxRef);
-		info->dqas_num ++;
+			idx++;
+		}
+
+		if(bms_is_empty(idSet))
+		{
+			add_dqa_expr(info, arg_tle->expr, arg_sortcl, ++maxRef);
+		}
+		else
+		{
+			int i;
+			bool need_to_add = true;
+			while ((i = bms_first_member(idSet)) >= 0)
+			{
+				if(0 == info->input_target->sortgrouprefs[i])
+				{
+					info->input_target->sortgrouprefs[i] = ++maxRef;
+					sortcl = copyObject(arg_sortcl);
+					sortcl->tleSortGroupRef = info->input_target->sortgrouprefs[i];
+					sortcl->hashable = true;
+					info->dqa_group_clause = lappend(info->dqa_group_clause, sortcl);
+
+					info->dqas_ref_bm = bms_add_member(info->dqas_ref_bm, sortcl->tleSortGroupRef);
+					info->dqas_num ++;
+
+					need_to_add = false;
+					break;
+				}
+
+				if(is_reference_by_dqa(info,i))
+				{
+					need_to_add = false;
+					break;
+				}
+			}
+
+			if(need_to_add)
+				add_dqa_expr(info, arg_tle->expr, arg_sortcl, ++maxRef);
+		}
+
 	}
 
 	/* Check all DISTINCT on single expr */
@@ -579,9 +649,6 @@ analyze_dqas(PlannerInfo *root,
 	else if (info->dqas_num < 1)
 		return INVALID;
 
-
-
-	info->input_target = input_target;
 	info->dqa_group_clause = list_concat(
 			list_copy(root->parse->groupClause),
 			info->dqa_group_clause);
@@ -652,7 +719,6 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 		info->dqa_group_clause = lappend(info->dqa_group_clause, sortcl);
 	}
 
-
 	path = (Path *) create_split_agg_path(root,
 	                                output_rel,
 	                                path,
@@ -702,9 +768,21 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	                                cxt->dNumGroups * getgpsegmentCount(),
 	                                &hash_info);
 
+
+
+#if 1
+	CdbPathLocus singleQE_locus;
+	CdbPathLocus_MakeSingleQE(&singleQE_locus, getgpsegmentCount());
+	path = cdbpath_create_motion_path(root,
+	                                  path,
+	                                  NIL,
+	                                  false,
+	                                  singleQE_locus);
+#else
 	if (group_need_redistribute)
 		path = cdbpath_create_motion_path(root, path, NIL, false,
 		                                  group_locus);
+#endif
 
 	path = (Path *) create_agg_path(root,
 	                                output_rel,
