@@ -6162,7 +6162,6 @@ ExecInitExpr(Expr *node, PlanState *parent)
 
 		case T_SplitTupleId:
 			{
-
 				Insist(parent && IsA(parent, AggState));
 				AggState *aggState = (AggState *)parent;
 				Agg* plan = (Agg *)aggState->ss.ps.plan;

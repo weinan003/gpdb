@@ -419,7 +419,7 @@ strip_aggdistinct(PathTarget *target)
 }
 
 static bool
-is_reference_by_dqa(cdb_distinct_info *info,int i)
+is_referenced_by_dqa(cdb_distinct_info *info, int i)
 {
 	ListCell *lc;
 	Index idx = info->input_target->sortgrouprefs[i];
@@ -448,7 +448,6 @@ add_dqa_expr(cdb_distinct_info *info, Expr *expr, SortGroupClause *arg_sortcl, i
 
 	info->dqas_ref_bm = bms_add_member(info->dqas_ref_bm, ref);
 	info->dqas_num ++;
-
 }
 
 /*
@@ -557,10 +556,16 @@ analyze_dqas(PlannerInfo *root,
 				}
 				else
 				{
-					return INVALID_DQA; /* FIXME: enable the group by dqa column case */
+					return INVALID_DQA; /* GPDB_96_MERGE_FIXME: enable the group by dqa column case */
 				}
 
-				if (is_reference_by_dqa(info, i)) /* dqa expr is already added */
+				/*
+				 * dqa expr is already added
+				 *
+				 * SELECT DQA1(c1), DQA2(c1) ...
+				 *                       ^ here we are
+				 */
+				if (is_referenced_by_dqa(info, i))
 				{
 					need_to_add = false;
 					break;
@@ -681,8 +686,8 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	                                           &distinct_need_redistribute);
 
 	if (distinct_need_redistribute)
-	path = cdbpath_create_motion_path(root, path, NIL, false,
-	                                  distinct_locus);
+		path = cdbpath_create_motion_path(root, path, NIL, false,
+										  distinct_locus);
 
 	path = (Path *) create_agg_path(root,
 	                                output_rel,

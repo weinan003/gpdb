@@ -1359,7 +1359,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 						strategy = "Hashed";
 						break;
 					case AGG_SPLITORDERED:
-						pname = "Split Ordered Aggregate ";
+						pname = "Split Ordered Aggregate";
 						strategy = "Plain";
 						break;
 					default:
