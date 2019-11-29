@@ -1128,8 +1128,8 @@ typedef struct Agg
 	/* Stream entries when out of memory instead of spilling to disk */
 	bool		streaming;
 
-	int         numDisCols;
-	AttrNumber  *distColIdx;
+	int			numDisCols;
+	AttrNumber	*distColIdx;
 } Agg;
 
 /* ----------------

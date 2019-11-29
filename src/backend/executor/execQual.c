@@ -6159,19 +6159,20 @@ ExecInitExpr(Expr *node, PlanState *parent)
 				state = (ExprState *) exprstate;
 			}
 			break;
+
 		case T_SplitTupleId:
-		{
+			{
 
-			Insist(parent && IsA(parent, AggState));
-			AggState *aggState = (AggState *)parent;
-			Agg* plan = (Agg *)aggState->ss.ps.plan;
+				Insist(parent && IsA(parent, AggState));
+				AggState *aggState = (AggState *)parent;
+				Agg* plan = (Agg *)aggState->ss.ps.plan;
 
-			state = (ExprState *) makeNode(ExprState);
-			SplitTupleId* tupleId = (SplitTupleId *)node;
-			tupleId->sid = 0;
-			tupleId->totalSplitNum = plan->numDisCols;
-			state->evalfunc = (ExprStateEvalFunc) ExecEvalSplitTupleIdExpr;
-		}
+				state = (ExprState *) makeNode(ExprState);
+				SplitTupleId* tupleId = (SplitTupleId *)node;
+				tupleId->sid = 0;
+				tupleId->totalSplitNum = plan->numDisCols;
+				state->evalfunc = (ExprStateEvalFunc) ExecEvalSplitTupleIdExpr;
+			}
 			break;
 
 		default:

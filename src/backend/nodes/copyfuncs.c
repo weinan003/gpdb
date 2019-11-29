@@ -5439,7 +5439,7 @@ _copyForeignKeyCacheInfo(const ForeignKeyCacheInfo *from)
 	return newnode;
 }
 
-static SplitTupleId*
+static SplitTupleId *
 _copySplitTupleId(const SplitTupleId *from)
 {
 	return makeNode(SplitTupleId);

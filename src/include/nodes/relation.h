@@ -1705,8 +1705,8 @@ typedef struct AggPath
 	List	   *groupClause;	/* a list of SortGroupClause's */
 	List	   *qual;			/* quals (HAVING quals), if any */
 	bool		streaming;
-	Bitmapset   *dqas_ref_bm;
-	int         dqas_num;
+	Bitmapset	*dqas_ref_bm;
+	int			dqas_num;
 } AggPath;
 
 /*

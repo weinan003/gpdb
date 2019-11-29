@@ -1675,4 +1675,5 @@ typedef struct SplitTupleId
 	Index       sid;
 	int         totalSplitNum;
 } SplitTupleId;
+
 #endif   /* PRIMNODES_H */

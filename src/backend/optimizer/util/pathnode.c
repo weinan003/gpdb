@@ -4094,20 +4094,26 @@ create_agg_path(PlannerInfo *root,
 }
 
 AggPath *create_split_agg_path(PlannerInfo *root,
-                               RelOptInfo *rel,
-                               Path *subpath,
-                               PathTarget *target,
-                               List *groupClause,
-                               const AggClauseCosts *aggcosts,
-                               double numGroups,
-                               struct HashAggTableSizes *hash_info,
-                               Bitmapset *dqas_ref_bm,
-                               int dqas_num)
+							   RelOptInfo *rel,
+							   Path *subpath,
+							   PathTarget *target,
+							   List *groupClause,
+							   const AggClauseCosts *aggcosts,
+							   double numGroups,
+							   struct HashAggTableSizes *hash_info,
+							   Bitmapset *dqas_ref_bm,
+							   int dqas_num)
 {
 	AggPath *apath = create_agg_path(root, rel, subpath,
-	                                 target, AGG_SPLITORDER, AGGSPLIT_SIMPLE,
-	                                 true, groupClause, NIL,
-	                                 aggcosts, numGroups, hash_info);
+									 target,
+									 AGG_SPLITORDERED,
+									 AGGSPLIT_SIMPLE,
+									 true,
+									 groupClause,
+									 NIL,
+									 aggcosts,
+									 numGroups,
+									 hash_info);
 
 	apath->dqas_ref_bm = bms_copy(dqas_ref_bm);
 	apath->dqas_num = dqas_num;

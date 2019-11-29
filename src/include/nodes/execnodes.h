@@ -2645,7 +2645,7 @@ typedef struct SplitAggInfo
 {
 	int             idx;
 	TupleTableSlot  *outerslot;
-}SplitAggInfo;
+} SplitAggInfo;
 
 typedef struct AggState
 {
@@ -2711,9 +2711,9 @@ typedef struct AggState
 	 */
 	bool		ps_TupFromTlist;
 
-	bool            *isnull_orig;
-	Bitmapset       *grpbySet;
-	SplitAggInfo   s_agg_info;
+	bool		*isnull_orig;
+	Bitmapset	*grpbySet;
+	SplitAggInfo	s_agg_info;
 } AggState;
 
 /* ----------------

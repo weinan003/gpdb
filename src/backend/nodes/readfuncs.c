@@ -1397,7 +1397,7 @@ _readGroupId(void)
 /*
  * _readSplitTupleId
  */
-static SplitTupleId*
+static SplitTupleId *
 _readSplitTupleId(void)
 {
 	READ_LOCALS(SplitTupleId);

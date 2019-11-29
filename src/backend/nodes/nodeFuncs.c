@@ -3225,13 +3225,13 @@ expression_tree_mutator(Node *node,
 			}
 			break;
 		case T_SplitTupleId:
-		{
-			SplitTupleId *stId = (SplitTupleId *)node;
-			SplitTupleId *newstId;
-			FLATCOPY(newstId, stId, SplitTupleId);
-			return (Node *) newstId;
-		}
-		break;
+			{
+				SplitTupleId *stId = (SplitTupleId *)node;
+				SplitTupleId *newstId;
+				FLATCOPY(newstId, stId, SplitTupleId);
+				return (Node *) newstId;
+			}
+			break;
 		default:
 			elog(ERROR, "unrecognized node type: %d",
 				 (int) nodeTag(node));

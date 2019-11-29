@@ -175,7 +175,6 @@
  *-------------------------------------------------------------------------
  */
 
-#include <string.h>
 #include "postgres.h"
 
 #include "access/htup_details.h"
@@ -204,9 +203,8 @@
 
 #include "cdb/cdbexplain.h"
 #include "cdb/cdbvars.h" /* mpp_hybrid_hash_agg */
-#include "parser/parsetree.h"
 
-#define IS_HASHAGG(aggstate) ((((Agg *) (aggstate)->ss.ps.plan)->aggstrategy == AGG_HASHED))
+#define IS_HASHAGG(aggstate) (((Agg *) (aggstate)->ss.ps.plan)->aggstrategy == AGG_HASHED)
 
 /*
  * AggStatePerTransData - per aggregate state value information
@@ -261,7 +259,7 @@ static TupleTableSlot *project_aggregates(AggState *aggstate);
 static Bitmapset *find_unaggregated_cols(AggState *aggstate);
 static bool find_unaggregated_cols_walker(Node *node, Bitmapset **colnos);
 static TupleTableSlot *agg_retrieve_direct(AggState *aggstate);
-static TupleTableSlot *split_order_agg_retrieve_direct(AggState  *node);
+static TupleTableSlot *split_ordered_agg_retrieve_direct(AggState  *node);
 static void agg_fill_hash_table(AggState *aggstate);
 static TupleTableSlot *agg_retrieve_hash_table(AggState *aggstate);
 static void ExecAggExplainEnd(PlanState *planstate, struct StringInfoData *buf);
@@ -1505,8 +1503,7 @@ finalize_aggregates(AggState *aggstate,
 	int			transno;
 
 	Assert(currentSet == 0 ||
-		   ((Agg *) aggstate->ss.ps.plan)->aggstrategy != AGG_HASHED ||
-		   ((Agg *) aggstate->ss.ps.plan)->aggstrategy != AGG_SPLITORDER);
+		   ((Agg *) aggstate->ss.ps.plan)->aggstrategy != AGG_HASHED);
 
 	aggstate->current_set = currentSet;
 
@@ -1524,7 +1521,6 @@ finalize_aggregates(AggState *aggstate,
 		if (pertrans->numSortCols > 0)
 		{
 			Assert(((Agg *) aggstate->ss.ps.plan)->aggstrategy != AGG_HASHED);
-			Assert(((Agg *) aggstate->ss.ps.plan)->aggstrategy != AGG_SPLITORDER);
 
 			if (pertrans->numInputs == 1)
 				process_ordered_aggregate_single(aggstate,
@@ -1761,8 +1757,8 @@ ExecAgg(AggState *node)
 					agg_fill_hash_table(node);
 				result = agg_retrieve_hash_table(node);
 				break;
-			case AGG_SPLITORDER:
-				result = split_order_agg_retrieve_direct(node);
+			case AGG_SPLITORDERED:
+				result = split_ordered_agg_retrieve_direct(node);
 				break;
 			default:
 				result = agg_retrieve_direct(node);
@@ -1777,18 +1773,19 @@ ExecAgg(AggState *node)
 }
 
 static TupleTableSlot *
-split_order_agg_retrieve_direct(AggState  *node)
+split_ordered_agg_retrieve_direct(AggState *node)
 {
 	ExprContext *econtext;
-	SplitAggInfo    *s_agg_info_p = &node->s_agg_info;
+	SplitAggInfo *s_agg_info_p = &node->s_agg_info;
 	TupleTableSlot *result;
 	econtext = node->ss.ps.ps_ExprContext;
 	Agg *plan = (Agg *)node->ss.ps.plan;
 
-	if (s_agg_info_p->idx == 0) {
+	if (s_agg_info_p->idx == 0)
+	{
 		s_agg_info_p->outerslot = fetch_input_tuple(node);
 
-		if(TupIsNull(s_agg_info_p->outerslot))
+		if (TupIsNull(s_agg_info_p->outerslot))
 		{
 			node->agg_done = TRUE;
 			return NULL;
@@ -1799,8 +1796,7 @@ split_order_agg_retrieve_direct(AggState  *node)
 
 		/* store original tupleslot isnull array */
 		memcpy(node->isnull_orig, s_agg_info_p->outerslot->PRIVATE_tts_isnull,
-				s_agg_info_p->outerslot->PRIVATE_tts_nvalid * sizeof(bool));
-
+			   s_agg_info_p->outerslot->PRIVATE_tts_nvalid * sizeof(bool));
 	}
 
 	/* reset isnull */
@@ -1808,10 +1804,11 @@ split_order_agg_retrieve_direct(AggState  *node)
 	memcpy(isnull, node->isnull_orig, s_agg_info_p->outerslot->PRIVATE_tts_nvalid);
 
 	/* populate isnull if the column belone to other distinct and is not a group by */
-	for(Index idx = 0; idx < plan->numDisCols; idx++)
+	for (Index idx = 0; idx < plan->numDisCols; idx++)
 	{
-		if(!(plan->distColIdx[idx] == plan->distColIdx[s_agg_info_p->idx]
-		 ||bms_is_member(plan->distColIdx[s_agg_info_p->idx], node->grpbySet)))
+		if (!(plan->distColIdx[idx] == plan->distColIdx[s_agg_info_p->idx]
+			  || bms_is_member(plan->distColIdx[s_agg_info_p->idx],
+							   node->grpbySet)))
 			isnull[plan->distColIdx[idx] - 1] = true;
 	}
 
@@ -2372,7 +2369,6 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 	if (node->groupingSets)
 	{
 		Assert(node->aggstrategy != AGG_HASHED);
-		Assert(node->aggstrategy != AGG_SPLITORDER);
 
 		numGroupingSets = list_length(node->groupingSets);
 
@@ -2950,9 +2946,9 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 		ReleaseSysCache(aggTuple);
 	}
 
-	if(node->aggstrategy == AGG_SPLITORDER)
+	if (node->aggstrategy == AGG_SPLITORDERED)
 	{
-		for(int keyno = 0; keyno < node->numCols; keyno++)
+		for (int keyno = 0; keyno < node->numCols; keyno++)
 		{
 			aggstate->grpbySet = bms_add_member(aggstate->grpbySet, node->grpColIdx[keyno]);
 		}
@@ -3239,7 +3235,6 @@ build_pertrans_for_aggref(AggStatePerTrans pertrans,
 		 * (yet)
 		 */
 		Assert(((Agg *) aggstate->ss.ps.plan)->aggstrategy != AGG_HASHED);
-		Assert(((Agg *) aggstate->ss.ps.plan)->aggstrategy != AGG_SPLITORDER);
 
 		/* If we have only one input, we need its len/byval info. */
 		if (numInputs == 1)
@@ -3757,12 +3752,11 @@ ExecEagerFreeAgg(AggState *node)
 		}
 	}
 
-	if(((Agg *)node->ss.ps.plan)->aggstrategy == AGG_SPLITORDER)
+	if (((Agg *)node->ss.ps.plan)->aggstrategy == AGG_SPLITORDERED)
 	{
 		bms_free(node->grpbySet);
 		pfree(node->isnull_orig);
 	}
-
 
 	/*
 	 * We don't need to ReScanExprContext the output tuple context here;

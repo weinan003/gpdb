@@ -34,11 +34,11 @@
 #include "nodes/makefuncs.h"
 
 typedef enum {
-	INVALID = 0,
-	SINGLEDQA,
-	MULTIDQAS,
-	MIXEDDQAS
-} DQATYPE ;
+	INVALID_DQA = -1,
+	SINGLE_DQA,
+	MULTI_DQAS,
+	MIXED_DQAS
+} DQAType;
 
 /*
  * For convenience, we collect various inputs and intermediate planning results
@@ -84,21 +84,15 @@ static void add_single_dqa_hash_agg_path(PlannerInfo *root,
 
 static void
 add_multi_dqas_hash_agg_path(PlannerInfo *root,
-                            Path *path,
-                            cdb_agg_planning_context *ctx,
-                            RelOptInfo *output_rel,
-                            cdb_distinct_info *info);
+							 Path *path,
+							 cdb_agg_planning_context *ctx,
+							 RelOptInfo *output_rel,
+							 cdb_distinct_info *info);
 
-static DQATYPE analyze_dqas(PlannerInfo *root,
-                            Path *path,
-                            cdb_agg_planning_context *ctx,
+static DQAType analyze_dqas(PlannerInfo *root,
+							Path *path,
+							cdb_agg_planning_context *ctx,
 							cdb_distinct_info *info);
-/*
-                            PathTarget **input_target_ret_p,
-                            List       **group_clause_ret_p,
-                            int        **distref_p,
-                            int        *maxref);
-                            */
 
 static PathTarget *
 strip_aggdistinct(PathTarget *target);
@@ -179,13 +173,11 @@ cdb_create_twostage_grouping_paths(PlannerInfo *root,
 											  path->pathkeys);
 			if (path == cheapest_path || is_sorted)
 			{
-#if 0
 				add_twostage_group_agg_path(root,
 											path,
 											is_sorted,
 											&cxt,
 											output_rel);
-#endif
 			}
 		}
 	}
@@ -203,34 +195,29 @@ cdb_create_twostage_grouping_paths(PlannerInfo *root,
 		/*
 		 * Try possible plans for DISTINCT-qualified aggregate.
 		 */
-
 		cdb_distinct_info info = {};
-		DQATYPE type = analyze_dqas(root, cheapest_path, &cxt, &info);
+		DQAType type = analyze_dqas(root, cheapest_path, &cxt, &info);
 		switch (type)
 		{
-			case SINGLEDQA:
-			{
-				add_single_dqa_hash_agg_path(root,
-				                             cheapest_path,
-				                             &cxt,
-				                             output_rel,
-				                             info.input_target,
-				                             info.dqa_group_clause);
-			}
-				break;
-			case MULTIDQAS:
-			{
-				add_multi_dqas_hash_agg_path(root,
-				                            cheapest_path,
-				                            &cxt,
-				                            output_rel,
-				                            &info);
-			}
+		case SINGLE_DQA:
+			add_single_dqa_hash_agg_path(root,
+										 cheapest_path,
+										 &cxt,
+										 output_rel,
+										 info.input_target,
+										 info.dqa_group_clause);
 			break;
-			case MIXEDDQAS:
-				/* mixed dqas with normal aggregation does not support mpp path yet */
-			default:
-				break;
+		case MULTI_DQAS:
+			add_multi_dqas_hash_agg_path(root,
+										 cheapest_path,
+										 &cxt,
+										 output_rel,
+										 &info);
+			break;
+		case MIXED_DQAS:
+			/* mixed dqas with normal aggregation does not support mpp path yet */
+		default:
+			break;
 		}
 	}
 }
@@ -244,7 +231,7 @@ add_twostage_group_agg_path(PlannerInfo *root,
 {
 	Query	   *parse = root->parse;
 	Path	   *initial_agg_path;
-	DQATYPE     dqa_type;
+	DQAType     dqa_type;
 	CdbPathLocus group_locus;
 	CdbPathLocus distinct_locus;
 	CdbPathLocus singleQE_locus;
@@ -262,64 +249,27 @@ add_twostage_group_agg_path(PlannerInfo *root,
 	if (!group_need_redistribute)
 		return;
 
-	/*
-	 *  Finalize Aggregate
-	 *    ->  Gather Motion
-	 *        ->  Partial Aggregate
-	 *            ->  Sort (if needed)
-	 *                ->  Redistribute Motion (if multi DQAs)
-	 *                    ->  SplitOrderAggregate (if multi DQAs)
-	 *                      ->  Seq Scan
-	 */
 	if (ctx->agg_costs->distinctAggrefs)
 	{
 		cdb_distinct_info info = {};
 		dqa_type = analyze_dqas(root, path, ctx, &info);
 
-		if (dqa_type != SINGLEDQA && dqa_type != MULTIDQAS)
+		if (dqa_type != SINGLE_DQA)
 			return;
 
 		path = (Path *) create_projection_path(root, path->parent, path, path->pathtarget);
 
-		/* If the tuples are split, they are not distributed as before. */
-		if (dqa_type == MULTIDQAS && CdbPathLocus_IsHashed(path->locus))
-		{
-			int numsegments = path->locus.numsegments;
-			CdbPathLocus_MakeStrewn(&path->locus, numsegments);
-		}
 		distinct_locus = cdb_choose_grouping_locus(root, path,
 												   info.input_target,
 												   info.dqa_group_clause, NIL, NIL,
 												   &distinct_need_redistribute);
 
 
-		/* single DQA doesn't need to split */
-		if (dqa_type == MULTIDQAS)
-		{
-			/* add SplitTupleId into pathtarget */
-			SplitTupleId *stid = makeNode(SplitTupleId);
-			add_column_to_pathtarget(info.input_target, (Expr *)stid, ++info.maxref);
-
-			/* split the tuples if there is at least one dqa */
-			path = (Path *) create_agg_path(root,
-											output_rel,
-											path,
-											info.input_target,
-											AGG_SPLITORDER,
-											AGGSPLIT_SIMPLE,
-											false, /* streaming */
-											NIL,
-											NIL,
-											ctx->agg_partial_costs, /* FIXME */
-											ctx->dNumGroups * getgpsegmentCount(),
-											NULL);
-		}
-
 		if (distinct_need_redistribute)
 			path = cdbpath_create_motion_path(root, path, NIL, false, distinct_locus);
 	}
 
-	if (!is_sorted || dqa_type == MULTIDQAS || distinct_need_redistribute)
+	if (!is_sorted || distinct_need_redistribute)
 	{
 		path = (Path *) create_sort_path(root,
 										 output_rel,
@@ -477,7 +427,7 @@ is_reference_by_dqa(cdb_distinct_info *info,int i)
 	foreach(lc, info->dqa_group_clause)
 	{
 		SortGroupClause *srtcl = lfirst(lc);
-		if(srtcl->tleSortGroupRef == idx)
+		if (srtcl->tleSortGroupRef == idx)
 			return true;
 	}
 
@@ -500,6 +450,7 @@ add_dqa_expr(cdb_distinct_info *info, Expr *expr, SortGroupClause *arg_sortcl, i
 	info->dqas_num ++;
 
 }
+
 /*
  * analyze_dqas
  * fetch all mpp dqas path required information
@@ -517,13 +468,13 @@ add_dqa_expr(cdb_distinct_info *info, Expr *expr, SortGroupClause *arg_sortcl, i
  *       if we want to add tuplesplitid expr, we need maxref to also add the expr
  *       into group by
  */
-static DQATYPE
+static DQAType
 analyze_dqas(PlannerInfo *root,
 			 Path *path,
 			 cdb_agg_planning_context *ctx,
 			 cdb_distinct_info *info)
 {
-	DQATYPE     ret = SINGLEDQA;
+	DQAType     ret = SINGLE_DQA;
 	ListCell   *lc;
 	Index		maxRef;
 
@@ -550,10 +501,11 @@ analyze_dqas(PlannerInfo *root,
 		SortGroupClause *arg_sortcl;
 		SortGroupClause *sortcl = NULL;
 		TargetEntry *arg_tle;
+		int			idx = 0;
 		ListCell   *lcc;
 
 		if (list_length(aggref->aggdistinct) != 1)
-			return INVALID;		/* I don't think the parser can even produce this */
+			return INVALID_DQA;		/* I don't think the parser can even produce this */
 
 		arg_sortcl = (SortGroupClause *) linitial(aggref->aggdistinct);
 		arg_tle = get_sortgroupref_tle(arg_sortcl->tleSortGroupRef, aggref->args);
@@ -565,10 +517,8 @@ analyze_dqas(PlannerInfo *root,
 			 * for DISTINCT args. DISTINCT aggs are never implemented with hashing
 			 * in PostgreSQL.
 			 */
-			return INVALID;
+			return INVALID_DQA;
 		}
-
-		int idx = 0;
 
 		Bitmapset *idSet = NULL;
 		foreach(lcc, info->input_target->exprs)
@@ -581,17 +531,17 @@ analyze_dqas(PlannerInfo *root,
 			idx++;
 		}
 
-		if(bms_is_empty(idSet))
+		if (bms_is_empty(idSet))
 		{
 			add_dqa_expr(info, arg_tle->expr, arg_sortcl, ++maxRef);
 		}
 		else
 		{
-			int i;
+			int i = 0;
 			bool need_to_add = true;
-			while ((i = bms_first_member(idSet)) >= 0)
+			while ((i = bms_first_member(idSet)) >= 0) /* the index of dqa target */
 			{
-				if(0 == info->input_target->sortgrouprefs[i])
+				if (info->input_target->sortgrouprefs[i] == 0) /* not referred by group_by */
 				{
 					info->input_target->sortgrouprefs[i] = ++maxRef;
 					sortcl = copyObject(arg_sortcl);
@@ -602,28 +552,30 @@ analyze_dqas(PlannerInfo *root,
 					info->dqas_ref_bm = bms_add_member(info->dqas_ref_bm, sortcl->tleSortGroupRef);
 					info->dqas_num ++;
 
-
 					need_to_add = false;
 					break;
 				}
+				else
+				{
+					return INVALID_DQA; /* FIXME: enable the group by dqa column case */
+				}
 
-				if(is_reference_by_dqa(info,i))
+				if (is_reference_by_dqa(info, i)) /* dqa expr is already added */
 				{
 					need_to_add = false;
 					break;
 				}
 			}
 
-			if(need_to_add)
+			if (need_to_add)
 				add_dqa_expr(info, arg_tle->expr, arg_sortcl, ++maxRef);
 		}
-
 	}
 
 	/* Check all DISTINCT on single expr */
 	if (info->dqas_num > 1)
 	{
-		ret = MULTIDQAS;
+		ret = MULTI_DQAS;
 
 		/* Check that there are no non-DISTINCT aggregates mixed in. */
 		List *varnos = pull_var_clause((Node *) ctx->target->exprs,
@@ -641,18 +593,17 @@ analyze_dqas(PlannerInfo *root,
 				if (!aggref->aggdistinct)
 				{
 					/* mixing DISTINCT and non-DISTINCT aggs */
-					ret = MIXEDDQAS;
+					ret = MIXED_DQAS;
 					break;
 				}
 			}
 		}
 	}
 	else if (info->dqas_num < 1)
-		return INVALID;
+		return INVALID_DQA;
 
-	info->dqa_group_clause = list_concat(
-			list_copy(root->parse->groupClause),
-			info->dqa_group_clause);
+	info->dqa_group_clause = list_concat(list_copy(root->parse->groupClause),
+										 info->dqa_group_clause);
 	info->maxref = maxRef;
 
 	return ret;
@@ -679,13 +630,12 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	                           &hash_info))
 		return;
 
-
 	/* Finalize Aggregate
 	 *   -> Gather Motion
 	 *        -> Partial Aggregate
 	 *             -> HashAggregate, to remote duplicates
 	 *                  -> Redistribute Motion (according to DISTINCT expr)
-	 *                       -> Streaming SplitOrderAggregate (Split tuple according to DISTINCT expr)
+	 *                       -> Streaming Split Ordered Aggregate  (Split tuple according to DISTINCT expr)
 	 *                            -> input
 	 */
 	path = (Path *) create_projection_path(root, path->parent, path, info->input_target);
@@ -730,10 +680,9 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	                                           info->dqa_group_clause, NIL, NIL,
 	                                           &distinct_need_redistribute);
 
-	if(distinct_need_redistribute)
+	if (distinct_need_redistribute)
 	path = cdbpath_create_motion_path(root, path, NIL, false,
 	                                  distinct_locus);
-
 
 	path = (Path *) create_agg_path(root,
 	                                output_rel,
