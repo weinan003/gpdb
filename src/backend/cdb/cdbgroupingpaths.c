@@ -602,6 +602,7 @@ analyze_dqas(PlannerInfo *root,
 					info->dqas_ref_bm = bms_add_member(info->dqas_ref_bm, sortcl->tleSortGroupRef);
 					info->dqas_num ++;
 
+
 					need_to_add = false;
 					break;
 				}
@@ -668,9 +669,7 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
                              cdb_distinct_info *info)
 {
 	CdbPathLocus distinct_locus;
-	CdbPathLocus group_locus;
 	bool		distinct_need_redistribute;
-	bool        group_need_redistribute;
 
 	HashAggTableSizes hash_info;
 	if (!calcHashAggTableSizes(work_mem * 1024L,
@@ -691,12 +690,6 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	 */
 	path = (Path *) create_projection_path(root, path->parent, path, info->input_target);
 	int numsegments = path->locus.numsegments;
-
-	group_locus = cdb_choose_grouping_locus(root, path,
-	                                        info->input_target,
-	                                        root->parse->groupClause, NIL, NIL,
-	                                        &group_need_redistribute);
-
 
 	/* add SplitTupleId into pathtarget */
 	{
@@ -770,7 +763,6 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 
 
 
-#if 1
 	CdbPathLocus singleQE_locus;
 	CdbPathLocus_MakeSingleQE(&singleQE_locus, getgpsegmentCount());
 	path = cdbpath_create_motion_path(root,
@@ -778,11 +770,6 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	                                  NIL,
 	                                  false,
 	                                  singleQE_locus);
-#else
-	if (group_need_redistribute)
-		path = cdbpath_create_motion_path(root, path, NIL, false,
-		                                  group_locus);
-#endif
 
 	path = (Path *) create_agg_path(root,
 	                                output_rel,

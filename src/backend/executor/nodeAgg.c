@@ -1804,17 +1804,18 @@ split_order_agg_retrieve_direct(AggState  *node)
 	}
 
 	/* reset isnull */
-	bool *isnull = s_agg_info_p->outerslot->PRIVATE_tts_isnull;
+	bool *isnull = slot_get_isnull(s_agg_info_p->outerslot);
 	memcpy(isnull, node->isnull_orig, s_agg_info_p->outerslot->PRIVATE_tts_nvalid);
 
 	/* populate isnull if the column belone to other distinct and is not a group by */
-	//if(!bms_is_member(plan->distColIdx[s_agg_info_p->idx], node->grpbySet))
-	isnull[plan->distColIdx[s_agg_info_p->idx] - 1] = true;
+	for(Index idx = 0; idx < plan->numDisCols; idx++)
+	{
+		if(!(plan->distColIdx[idx] == plan->distColIdx[s_agg_info_p->idx]
+		 ||bms_is_member(plan->distColIdx[s_agg_info_p->idx], node->grpbySet)))
+			isnull[plan->distColIdx[idx] - 1] = true;
+	}
 
 	s_agg_info_p->idx = (s_agg_info_p->idx + 1) % plan->numDisCols;
-
-	memcpy(s_agg_info_p->outerslot->PRIVATE_tts_isnull,isnull,
-			s_agg_info_p->outerslot->PRIVATE_tts_nvalid * sizeof(bool));
 
 	econtext->ecxt_outertuple = s_agg_info_p->outerslot;
 	ResetExprContext(econtext);
