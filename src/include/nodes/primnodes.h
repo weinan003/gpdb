@@ -1676,4 +1676,9 @@ typedef struct SplitTupleId
 	int         totalSplitNum;
 } SplitTupleId;
 
+typedef struct ShadowExpr
+{
+	Expr    xpr;
+	Expr    *expr;
+} ShadowExpr;
 #endif   /* PRIMNODES_H */

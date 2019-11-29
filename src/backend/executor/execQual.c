@@ -6174,6 +6174,14 @@ ExecInitExpr(Expr *node, PlanState *parent)
 			}
 			break;
 
+		case T_ShadowExpr:
+			{
+				ShadowExpr *sexpr = (ShadowExpr *) node;
+				state = ExecInitExpr(sexpr->expr, parent);
+				return state;
+			}
+			break;
+
 		default:
 			elog(ERROR, "unrecognized node type: %d",
 				 (int) nodeTag(node));

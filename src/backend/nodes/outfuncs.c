@@ -1536,6 +1536,14 @@ _outSplitTupleId(StringInfo str, const SplitTupleId *node)
 }
 
 static void
+_outShadowExpr(StringInfo str, const ShadowExpr *node)
+{
+	WRITE_NODE_TYPE("SHADOWEXPR");
+
+	WRITE_NODE_FIELD(expr);
+}
+
+static void
 _outWindowFunc(StringInfo str, const WindowFunc *node)
 {
 	WRITE_NODE_TYPE("WINDOWFUNC");

@@ -477,6 +477,9 @@ analyze_dqas(PlannerInfo *root,
 	ListCell   *lc;
 	Index		maxRef;
 
+	PathTarget *ctarget = copy_pathtarget(ctx->target);
+	PathTarget *cpartial_grouping_target = copy_pathtarget(ctx->partial_grouping_target);
+
 	/* Prepare a modifiable copy of the input path target */
 	info->input_target = copy_pathtarget(path->pathtarget);
 	maxRef = 0;
@@ -519,62 +522,73 @@ analyze_dqas(PlannerInfo *root,
 			return INVALID_DQA;
 		}
 
-		Bitmapset *idSet = NULL;
-		foreach(lcc, info->input_target->exprs)
+		bool need_add = true;
+		foreach (lcc, info->input_target->exprs)
 		{
 			Expr		*expr = lfirst(lcc);
 
 			if (equal(expr, arg_tle->expr))
-				idSet = bms_add_member(idSet, idx);
-
-			idx++;
-		}
-
-		if (bms_is_empty(idSet))
-		{
-			add_dqa_expr(info, arg_tle->expr, arg_sortcl, ++maxRef);
-		}
-		else
-		{
-			int i = 0;
-			bool need_to_add = true;
-			while ((i = bms_first_member(idSet)) >= 0) /* the index of dqa target */
 			{
-				if (info->input_target->sortgrouprefs[i] == 0) /* not referred by group_by */
+				if (0 == info->input_target->sortgrouprefs[idx])
 				{
-					info->input_target->sortgrouprefs[i] = ++maxRef;
+					/* if expr is not referenced by any one */
+					info->input_target->sortgrouprefs[idx] = ++maxRef;
+
 					sortcl = copyObject(arg_sortcl);
-					sortcl->tleSortGroupRef = info->input_target->sortgrouprefs[i];
+					sortcl->tleSortGroupRef = info->input_target->sortgrouprefs[idx];
 					sortcl->hashable = true;
 					info->dqa_group_clause = lappend(info->dqa_group_clause, sortcl);
 
 					info->dqas_ref_bm = bms_add_member(info->dqas_ref_bm, sortcl->tleSortGroupRef);
 					info->dqas_num ++;
+					need_add = false;
+				}
+				else if (!is_referenced_by_dqa(info,idx))
+				{
+					/* if expr is referenct by GROUP BY clause repackage expr to ShadowExpr */
+					ShadowExpr *sexpr = makeNode(ShadowExpr);
+					sexpr->expr = expr;
+					lfirst(lcc) = sexpr;
 
-					need_to_add = false;
-					break;
+					ListCell *lc1 ;
+					foreach(lc1, cpartial_grouping_target->exprs)
+					{
+						Expr *pExpr = lfirst(lc1);
+						if(equal(expr,pExpr))
+						{
+							ShadowExpr *sexpr1 = makeNode(ShadowExpr);
+							sexpr1->expr = pExpr;
+							lfirst(lc1) = sexpr1;
+						}
+					}
+
+					foreach(lc1, ctarget->exprs)
+					{
+						Expr *pExpr = lfirst(lc1);
+						if(equal(expr,pExpr))
+						{
+							ShadowExpr *sexpr1 = makeNode(ShadowExpr);
+							sexpr1->expr = pExpr;
+							lfirst(lc1) = sexpr1;
+						}
+					}
 				}
 				else
 				{
-					return INVALID_DQA; /* GPDB_96_MERGE_FIXME: enable the group by dqa column case */
-				}
 
-				/*
-				 * dqa expr is already added
-				 *
-				 * SELECT DQA1(c1), DQA2(c1) ...
-				 *                       ^ here we are
-				 */
-				if (is_referenced_by_dqa(info, i))
-				{
-					need_to_add = false;
-					break;
+					need_add = false;
 				}
+				/* otherwise, the expr is referenced by other DQA */
+
+				break;
 			}
 
-			if (need_to_add)
-				add_dqa_expr(info, arg_tle->expr, arg_sortcl, ++maxRef);
+			idx++;
 		}
+
+		if (need_add)
+			add_dqa_expr(info, arg_tle->expr, arg_sortcl, ++maxRef);
+
 	}
 
 	/* Check all DISTINCT on single expr */
@@ -610,6 +624,8 @@ analyze_dqas(PlannerInfo *root,
 	info->dqa_group_clause = list_concat(list_copy(root->parse->groupClause),
 										 info->dqa_group_clause);
 	info->maxref = maxRef;
+	ctx->target = ctarget;
+	ctx->partial_grouping_target = cpartial_grouping_target;
 
 	return ret;
 }
@@ -646,27 +662,6 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	path = (Path *) create_projection_path(root, path->parent, path, info->input_target);
 	int numsegments = path->locus.numsegments;
 
-	/* add SplitTupleId into pathtarget */
-	{
-		info->input_target = copy_pathtarget(info->input_target);
-		SplitTupleId *stid = makeNode(SplitTupleId);
-		add_column_to_pathtarget(info->input_target, (Expr *)stid, ++info->maxref);
-	}
-
-	/* add SplitTupleId into groupby clause */
-	{
-		Oid eqop;
-		bool hashable;
-		get_sort_group_operators(INT4OID, false, true, false, NULL, &eqop, NULL, &hashable);
-
-		SortGroupClause *sortcl = makeNode(SortGroupClause);
-		sortcl->tleSortGroupRef = info->maxref;
-		sortcl->hashable = hashable;
-		sortcl->eqop = eqop;
-
-		info->dqa_group_clause = lappend(info->dqa_group_clause, sortcl);
-	}
-
 	path = (Path *) create_split_agg_path(root,
 	                                output_rel,
 	                                path,
@@ -677,7 +672,6 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	                                &hash_info,
 	                                info->dqas_ref_bm,
 	                                info->dqas_num);
-
 
 	CdbPathLocus_MakeStrewn(&path->locus, numsegments);
 	distinct_locus = cdb_choose_grouping_locus(root, path,

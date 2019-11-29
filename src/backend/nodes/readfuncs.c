@@ -1394,6 +1394,16 @@ _readGroupId(void)
 	READ_DONE();
 }
 
+static ShadowExpr*
+_readShadowExpr(void)
+{
+	READ_LOCALS(ShadowExpr);
+
+	READ_NODE_FIELD(expr);
+
+	READ_DONE();
+}
+
 /*
  * _readSplitTupleId
  */
@@ -4081,6 +4091,8 @@ parseNodeString(void)
 		return_value = _readGroupId();
 	else if (MATCH("SPILTTUPLEID", 12))
 		return_value = _readSplitTupleId();
+	else if (MATCH("SHADOWEXPR", 10))
+		return_value = _readShadowExpr();
 	else if (MATCH("WINDOWFUNC", 10))
 		return_value = _readWindowFunc();
 	else if (MATCH("ARRAYREF", 8))

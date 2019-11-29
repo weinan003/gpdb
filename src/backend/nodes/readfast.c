@@ -2529,6 +2529,9 @@ readNodeBinary(void)
 			case T_SplitTupleId:
 				return_value = _readSplitTupleId();
 				break;
+			case T_ShadowExpr:
+				return_value = _readShadowExpr();
+				break;
 			case T_WindowFunc:
 				return_value = _readWindowFunc();
 				break;

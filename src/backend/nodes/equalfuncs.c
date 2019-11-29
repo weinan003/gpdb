@@ -3742,6 +3742,9 @@ equal(const void *a, const void *b)
 		case T_SplitTupleId:
 			retval = true;
 			break;
+		case T_ShadowExpr:
+			retval = equal(((ShadowExpr *)a)->expr,((ShadowExpr *)b)->expr);
+			break;
 
 		default:
 			elog(ERROR, "unrecognized node type: %d",

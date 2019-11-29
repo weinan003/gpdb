@@ -5445,6 +5445,15 @@ _copySplitTupleId(const SplitTupleId *from)
 	return makeNode(SplitTupleId);
 }
 
+static ShadowExpr*
+_copyShadowExpr(const ShadowExpr *from)
+{
+	ShadowExpr * newnode = makeNode(ShadowExpr);
+
+	COPY_NODE_FIELD(expr);
+
+	return newnode;
+}
 /*
  * copyObject
  *
@@ -6456,6 +6465,9 @@ copyObject(const void *from)
 
 		case T_SplitTupleId:
 			retval = _copySplitTupleId(from);
+			break;
+		case T_ShadowExpr:
+			retval = _copyShadowExpr(from);
 			break;
 
 		default:

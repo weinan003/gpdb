@@ -284,7 +284,9 @@ exprType(const Node *expr)
 		case T_SplitTupleId:
 			type = INT4OID;
 			break;
-
+		case T_ShadowExpr:
+			type = exprType((Node *)((ShadowExpr *) expr)->expr);
+			break;
 		default:
 			elog(ERROR, "unrecognized node type: %d", (int) nodeTag(expr));
 			type = InvalidOid;	/* keep compiler quiet */
@@ -973,6 +975,9 @@ exprCollation(const Node *expr)
 			break;
 		case T_SplitTupleId:
 			coll = InvalidOid;
+			break;
+		case T_ShadowExpr:
+			coll = exprCollation(((ShadowExpr *)expr)->expr);
 			break;
 		default:
 			elog(ERROR, "unrecognized node type: %d", (int) nodeTag(expr));
@@ -1942,6 +1947,8 @@ expression_tree_walker(Node *node,
 		case T_SplitTupleId:
 			/* primitive node types with no expression subnodes */
 			break;
+		case T_ShadowExpr:
+			return walker(((ShadowExpr *) node)->expr, context);
 		case T_WithCheckOption:
 			return walker(((WithCheckOption *) node)->qual, context);
 		case T_Aggref:
@@ -3230,6 +3237,17 @@ expression_tree_mutator(Node *node,
 				SplitTupleId *newstId;
 				FLATCOPY(newstId, stId, SplitTupleId);
 				return (Node *) newstId;
+			}
+			break;
+		case T_ShadowExpr:
+			{
+				ShadowExpr *sExpr = (ShadowExpr *)node;
+				ShadowExpr *newSExpr;
+
+				FLATCOPY(newSExpr, sExpr, ShadowExpr);
+				MUTATE(newSExpr->expr, sExpr->expr, Expr *);
+
+				return (Node *)newSExpr;
 			}
 			break;
 		default:
