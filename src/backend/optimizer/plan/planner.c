@@ -5320,6 +5320,35 @@ create_distinct_paths(PlannerInfo *root,
 }
 
 /*
+ * Since gpdb introduce ShadowExpr in multi-DQA mpp plan
+ * final PathTarget may changed. However, we do not want to
+ * Result node detect this change.
+ */
+static bool
+target_equal(PathTarget *pt1, PathTarget *pt2)
+{
+	if(list_length(pt1->exprs) != list_length(pt2->exprs))
+		return false;
+
+	ListCell *lc1, *lc2;
+	forboth(lc1, pt1->exprs, lc2, pt2->exprs)
+	{
+		if(IsA(lfirst(lc1),ShadowExpr))
+		{
+			ShadowExpr *sexpr = (ShadowExpr *)lfirst(lc1);
+			if(!equal(sexpr->expr, lfirst(lc2)))
+				return false;
+		}
+		else
+		{
+			if(!equal(lfirst(lc1), lfirst(lc2)))
+				return false;
+		}
+	}
+
+	return true;
+}
+/*
  * create_ordered_paths
  *
  * Build a new upperrel containing Paths for ORDER BY evaluation.
@@ -5383,7 +5412,7 @@ create_ordered_paths(PlannerInfo *root,
 			}
 
 			/* Add projection step if needed */
-			if (path->pathtarget != target)
+			if(!target_equal(path->pathtarget,target))
 				path = apply_projection_to_path(root, ordered_rel,
 												path, target);
 

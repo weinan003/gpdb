@@ -8459,8 +8459,9 @@ get_rule_expr(Node *node, deparse_context *context,
 		case T_ShadowExpr:
 			{
 				appendStringInfo(buf, "<");
-				get_rule_expr(((ShadowExpr *)node)->expr, context, showimplicit);
-				appendStringInfo(buf, ">'");
+				get_rule_expr((Node *)((ShadowExpr *)node)->expr, context, showimplicit);
+				appendStringInfo(buf, ">"
+						  "");
 			}
 			break;
 		default:
