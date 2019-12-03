@@ -2920,6 +2920,15 @@ _equalRoleSpec(const RoleSpec *a, const RoleSpec *b)
 	return true;
 }
 
+static bool
+_equalShadowExpr(const ShadowExpr *a, const ShadowExpr *b)
+{
+	COMPARE_SCALAR_FIELD(idx);
+	COMPARE_NODE_FIELD(expr);
+
+	return true;
+}
+
 /*
  * Stuff from pg_list.h
  */
@@ -3743,7 +3752,7 @@ equal(const void *a, const void *b)
 			retval = true;
 			break;
 		case T_ShadowExpr:
-			retval = equal(((ShadowExpr *)a)->expr,((ShadowExpr *)b)->expr);
+			retval = _equalShadowExpr(a, b);
 			break;
 
 		default:

@@ -1540,6 +1540,7 @@ _outShadowExpr(StringInfo str, const ShadowExpr *node)
 {
 	WRITE_NODE_TYPE("SHADOWEXPR");
 
+	WRITE_INT_FIELD(idx);
 	WRITE_NODE_FIELD(expr);
 }
 

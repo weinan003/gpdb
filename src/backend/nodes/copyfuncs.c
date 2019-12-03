@@ -5450,6 +5450,7 @@ _copyShadowExpr(const ShadowExpr *from)
 {
 	ShadowExpr * newnode = makeNode(ShadowExpr);
 
+	COPY_SCALAR_FIELD(idx);
 	COPY_NODE_FIELD(expr);
 
 	return newnode;

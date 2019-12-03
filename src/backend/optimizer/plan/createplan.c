@@ -1797,6 +1797,7 @@ create_agg_plan(PlannerInfo *root, AggPath *best_path)
 		plan->distColIdx[j] = te->resno;
 		j++;
 	}
+	plan->shadow_elimit = best_path->shadow_elimit;
 
 	return plan;
 }

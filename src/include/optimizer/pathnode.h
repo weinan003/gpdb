@@ -211,7 +211,8 @@ extern AggPath *create_split_agg_path(PlannerInfo *root,
                                       double numGroups,
                                       struct HashAggTableSizes *hash_info,
                                       Bitmapset *dqas_ref_bm,
-                                      int dqas_num);
+                                      int dqas_num,
+                                      bool shadow_elimit);
 
 extern AggPath *create_agg_path(PlannerInfo *root,
 				RelOptInfo *rel,

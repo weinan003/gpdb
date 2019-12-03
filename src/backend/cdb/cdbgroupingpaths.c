@@ -62,6 +62,10 @@ typedef struct
 	Bitmapset  *dqas_ref_bm;
 	int         dqas_num;
 	int        maxref;
+
+	PathTarget *target;
+	PathTarget *partial_grouping_target;
+	PathTarget *target_without_shadow;
 } cdb_distinct_info;
 
 static void add_twostage_group_agg_path(PlannerInfo *root,
@@ -89,10 +93,22 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 							 RelOptInfo *output_rel,
 							 cdb_distinct_info *info);
 
-static DQAType analyze_dqas(PlannerInfo *root,
-							Path *path,
-							cdb_agg_planning_context *ctx,
-							cdb_distinct_info *info);
+static void
+fetch_single_dqa_info(PlannerInfo *root,
+                       Path *path,
+                      cdb_agg_planning_context *ctx,
+                      cdb_distinct_info *info);
+
+static void
+fetch_multi_dqas_info(PlannerInfo *root,
+                      Path *path,
+                      cdb_agg_planning_context *ctx,
+                      cdb_distinct_info *info);
+
+static DQAType
+recognise_dqa_type(PlannerInfo *root,
+                   Path *path,
+                   cdb_agg_planning_context *ctx);
 
 static PathTarget *
 strip_aggdistinct(PathTarget *target);
@@ -196,10 +212,11 @@ cdb_create_twostage_grouping_paths(PlannerInfo *root,
 		 * Try possible plans for DISTINCT-qualified aggregate.
 		 */
 		cdb_distinct_info info = {};
-		DQAType type = analyze_dqas(root, cheapest_path, &cxt, &info);
+		DQAType type = recognise_dqa_type(root, cheapest_path, &cxt);
 		switch (type)
 		{
 		case SINGLE_DQA:
+			fetch_single_dqa_info(root, cheapest_path, &cxt, &info);
 			add_single_dqa_hash_agg_path(root,
 										 cheapest_path,
 										 &cxt,
@@ -208,6 +225,7 @@ cdb_create_twostage_grouping_paths(PlannerInfo *root,
 										 info.dqa_group_clause);
 			break;
 		case MULTI_DQAS:
+			fetch_multi_dqas_info(root, cheapest_path, &cxt, &info);
 			add_multi_dqas_hash_agg_path(root,
 										 cheapest_path,
 										 &cxt,
@@ -251,11 +269,13 @@ add_twostage_group_agg_path(PlannerInfo *root,
 
 	if (ctx->agg_costs->distinctAggrefs)
 	{
-		cdb_distinct_info info = {};
-		dqa_type = analyze_dqas(root, path, ctx, &info);
+		dqa_type = recognise_dqa_type(root, path, ctx);
 
 		if (dqa_type != SINGLE_DQA)
 			return;
+
+		cdb_distinct_info info = {};
+		fetch_single_dqa_info(root, path, ctx, &info);
 
 		path = (Path *) create_projection_path(root, path->parent, path, path->pathtarget);
 
@@ -435,10 +455,9 @@ is_referenced_by_dqa(cdb_distinct_info *info, int i)
 }
 
 static void
-add_dqa_expr(cdb_distinct_info *info, Expr *expr, SortGroupClause *arg_sortcl, int ref)
+ref_dqa_expr(cdb_distinct_info *info, SortGroupClause *arg_sortcl, int ref)
 {
 	SortGroupClause *sortcl;
-	add_column_to_pathtarget(info->input_target, expr, ref);
 
 	sortcl = copyObject(arg_sortcl);
 	sortcl->tleSortGroupRef = ref;
@@ -450,64 +469,25 @@ add_dqa_expr(cdb_distinct_info *info, Expr *expr, SortGroupClause *arg_sortcl, i
 	info->dqas_num ++;
 }
 
-/*
- * analyze_dqas
- * fetch all mpp dqas path required information
- *
- * cdb_distinct_info is return value
- * info->input_target: subpath targetlist + all DISTINCT expr
- *
- *       dqa_group_clause: GROUP BY/ORDER BY clause + DISTINCT expr clause
- *
- *       distinct_ref: an array for only record DISTINCT expr reference index
- *       for splitorderagg, it require split tuple depends on each DISTINCT expr
- *       this array give a hint for that
- *
- *       maxref: after analyze the final maxref value
- *       if we want to add tuplesplitid expr, we need maxref to also add the expr
- *       into group by
- */
 static DQAType
-analyze_dqas(PlannerInfo *root,
-			 Path *path,
-			 cdb_agg_planning_context *ctx,
-			 cdb_distinct_info *info)
+recognise_dqa_type(PlannerInfo *root,
+					Path *path,
+					cdb_agg_planning_context *ctx)
 {
-	DQAType     ret = SINGLE_DQA;
 	ListCell   *lc;
-	Index		maxRef;
+	Expr    *dqaExpr = NULL;
+	DQAType ret;
 
-	PathTarget *ctarget = copy_pathtarget(ctx->target);
-	PathTarget *cpartial_grouping_target = copy_pathtarget(ctx->partial_grouping_target);
+	ret = INVALID_DQA;
 
-	/* Prepare a modifiable copy of the input path target */
-	info->input_target = copy_pathtarget(path->pathtarget);
-	maxRef = 0;
-	if (info->input_target->sortgrouprefs)
-	{
-		for (int idx = 0; idx < list_length(info->input_target->exprs); idx++)
-		{
-			if (info->input_target->sortgrouprefs[idx] > maxRef)
-				maxRef = info->input_target->sortgrouprefs[idx];
-		}
-	}
-	else
-		info->input_target->sortgrouprefs = (Index *) palloc0(list_length(info->input_target->exprs) * sizeof(Index));
-
-	/* Analyze the DISTINCT argument, to see if it's something we can
-	 * support.
-	 */
 	foreach(lc, ctx->agg_costs->distinctAggrefs)
 	{
-		Aggref	   *aggref = (Aggref *) lfirst(lc);
+		Aggref *aggref = (Aggref *) lfirst(lc);
 		SortGroupClause *arg_sortcl;
-		SortGroupClause *sortcl = NULL;
 		TargetEntry *arg_tle;
-		int			idx = 0;
-		ListCell   *lcc;
 
 		if (list_length(aggref->aggdistinct) != 1)
-			return INVALID_DQA;		/* I don't think the parser can even produce this */
+			return ret;        /* I don't think the parser can even produce this */
 
 		arg_sortcl = (SortGroupClause *) linitial(aggref->aggdistinct);
 		arg_tle = get_sortgroupref_tle(arg_sortcl->tleSortGroupRef, aggref->args);
@@ -519,83 +499,23 @@ analyze_dqas(PlannerInfo *root,
 			 * for DISTINCT args. DISTINCT aggs are never implemented with hashing
 			 * in PostgreSQL.
 			 */
-			return INVALID_DQA;
+			return ret;
 		}
 
-		bool need_add = true;
-		foreach (lcc, info->input_target->exprs)
+		if(dqaExpr == NULL)
 		{
-			Expr		*expr = lfirst(lcc);
-
-			if (equal(expr, arg_tle->expr))
-			{
-				if (0 == info->input_target->sortgrouprefs[idx])
-				{
-					/* if expr is not referenced by any one */
-					info->input_target->sortgrouprefs[idx] = ++maxRef;
-
-					sortcl = copyObject(arg_sortcl);
-					sortcl->tleSortGroupRef = info->input_target->sortgrouprefs[idx];
-					sortcl->hashable = true;
-					info->dqa_group_clause = lappend(info->dqa_group_clause, sortcl);
-
-					info->dqas_ref_bm = bms_add_member(info->dqas_ref_bm, sortcl->tleSortGroupRef);
-					info->dqas_num ++;
-					need_add = false;
-				}
-				else if (!is_referenced_by_dqa(info,idx))
-				{
-					/* if expr is referenct by GROUP BY clause repackage expr to ShadowExpr */
-					ShadowExpr *sexpr = makeNode(ShadowExpr);
-					sexpr->expr = expr;
-					lfirst(lcc) = sexpr;
-
-					ListCell *lc1 ;
-					foreach(lc1, cpartial_grouping_target->exprs)
-					{
-						Expr *pExpr = lfirst(lc1);
-						if(equal(expr,pExpr))
-						{
-							ShadowExpr *sexpr1 = makeNode(ShadowExpr);
-							sexpr1->expr = pExpr;
-							lfirst(lc1) = sexpr1;
-						}
-					}
-
-					foreach(lc1, ctarget->exprs)
-					{
-						Expr *pExpr = lfirst(lc1);
-						if(equal(expr,pExpr))
-						{
-							ShadowExpr *sexpr1 = makeNode(ShadowExpr);
-							sexpr1->expr = pExpr;
-							lfirst(lc1) = sexpr1;
-						}
-					}
-				}
-				else
-				{
-
-					need_add = false;
-				}
-				/* otherwise, the expr is referenced by other DQA */
-
-				break;
-			}
-
-			idx++;
+			dqaExpr = arg_tle->expr;
+			ret = SINGLE_DQA;
 		}
-
-		if (need_add)
-			add_dqa_expr(info, arg_tle->expr, arg_sortcl, ++maxRef);
-
+		else if(!equal(dqaExpr, arg_tle->expr))
+		{
+			ret = MULTI_DQAS;
+			break;
+		}
 	}
 
-	/* Check all DISTINCT on single expr */
-	if (info->dqas_num > 1)
+	if(ret != INVALID_DQA)
 	{
-		ret = MULTI_DQAS;
-
 		/* Check that there are no non-DISTINCT aggregates mixed in. */
 		List *varnos = pull_var_clause((Node *) ctx->target->exprs,
 		                               PVC_INCLUDE_AGGREGATES |
@@ -612,22 +532,235 @@ analyze_dqas(PlannerInfo *root,
 				if (!aggref->aggdistinct)
 				{
 					/* mixing DISTINCT and non-DISTINCT aggs */
-					ret = MIXED_DQAS;
-					break;
+					return MIXED_DQAS;
+				}
+			}
+		}
+
+	}
+
+	return ret;
+}
+
+static ShadowExpr*
+makeShadowExpr(Expr *expr,int idx)
+{
+	ShadowExpr *sexpr = makeNode(ShadowExpr);
+	sexpr->expr = expr;
+	sexpr->idx  = idx;
+	return sexpr;
+}
+
+static void
+mutateShadowExpr(Expr* expr, List *l)
+{
+	int i = 0;
+	ListCell *lc1 ;
+	foreach(lc1, l)
+	{
+		Expr *pExpr = lfirst(lc1);
+		if(equal(expr, pExpr))
+		{
+			lfirst(lc1) = makeShadowExpr(pExpr, i);
+		}
+		i ++;
+	}
+}
+/*
+ * fetch all mpp dqas path required information
+ *
+ * cdb_distinct_info is return value
+ * info->input_target: subpath targetlist + all DISTINCT expr
+ *
+ *       dqa_group_clause: GROUP BY/ORDER BY clause + DISTINCT expr clause
+ *
+ *       distinct_ref: an array for only record DISTINCT expr reference index
+ *       for splitorderagg, it require split tuple depends on each DISTINCT expr
+ *       this array give a hint for that
+ *
+ *       maxref: after analyze the final maxref value
+ *       if we want to add tuplesplitid expr, we need maxref to also add the expr
+ *       into group by
+ */
+static void
+fetch_multi_dqas_info(PlannerInfo *root,
+                      Path *path,
+                      cdb_agg_planning_context *ctx,
+                      cdb_distinct_info *info)
+{
+	Index		maxRef;
+	ListCell    *lc;
+	PathTarget *ctarget = copy_pathtarget(ctx->target);
+	PathTarget *cpartial_grouping_target = copy_pathtarget(ctx->partial_grouping_target);
+
+	info->input_target = copy_pathtarget(path->pathtarget);
+	maxRef = 0;
+	if (info->input_target->sortgrouprefs)
+	{
+		for (int idx = 0; idx < list_length(info->input_target->exprs); idx++)
+		{
+			if (info->input_target->sortgrouprefs[idx] > maxRef)
+				maxRef = info->input_target->sortgrouprefs[idx];
+		}
+	}
+	else
+		info->input_target->sortgrouprefs = (Index *) palloc0(list_length(info->input_target->exprs) * sizeof(Index));
+
+	foreach(lc, ctx->agg_costs->distinctAggrefs)
+	{
+		Aggref	   *aggref = (Aggref *) lfirst(lc);
+		SortGroupClause *arg_sortcl;
+		TargetEntry *arg_tle;
+		ListCell   *lcc;
+
+		arg_sortcl = (SortGroupClause *) linitial(aggref->aggdistinct);
+		arg_tle = get_sortgroupref_tle(arg_sortcl->tleSortGroupRef, aggref->args);
+
+		ListCell *dqa_lc = NULL;
+		ListCell *dqa_shadow_lc = NULL;
+		int dqa_lc_idx;
+
+		/*
+		 * 加一段详尽的注释
+		 */
+		int			idx = 0;
+		foreach (lcc, info->input_target->exprs)
+		{
+			Expr		*expr = lfirst(lcc);
+
+			if (equal(arg_tle->expr, expr))
+			{
+				dqa_lc = lcc;
+				dqa_lc_idx = idx;
+			}
+			else if (IsA(expr, ShadowExpr)
+					&& equal(arg_tle->expr, ((ShadowExpr *)expr)->expr))
+			{
+				dqa_shadow_lc = lcc;
+				break;
+			}
+
+			idx ++;
+		}
+
+		/* If dqa_shadow_lc not null indicate that another DQA has changed GROUP BY Expr to ShadowExpr */
+		if (!dqa_shadow_lc)
+		{
+			if (!dqa_lc)
+			{
+				/* DQA expr does not in PathTarget */
+				add_column_to_pathtarget(info->input_target, arg_tle->expr, ++maxRef);
+				ref_dqa_expr(info, arg_sortcl, maxRef);
+			}
+			else if (dqa_lc && info->input_target->sortgrouprefs[dqa_lc_idx] == 0)
+			{
+				/* DQA expr in PathTarget but no reference */
+				info->input_target->sortgrouprefs[dqa_lc_idx] = ++maxRef;
+				ref_dqa_expr(info, arg_sortcl, maxRef);
+			}
+			else
+			{
+				Index exprRef = info->input_target->sortgrouprefs[dqa_lc_idx];
+				if(!bms_is_member(exprRef, info->dqas_ref_bm))
+				{
+					/* DQA expr also in GROUP BY clause */
+					Expr *dqa_expr = (Expr *)lfirst(dqa_lc);
+					lfirst(dqa_lc) = makeShadowExpr(dqa_expr, dqa_lc_idx);
+
+					mutateShadowExpr(dqa_expr, cpartial_grouping_target->exprs);
+					mutateShadowExpr(dqa_expr, ctarget->exprs);
+
+					add_column_to_pathtarget(cpartial_grouping_target, arg_tle->expr, 0);
+					add_column_to_pathtarget(ctarget, arg_tle->expr, 0);
+
+					add_column_to_pathtarget(info->input_target, arg_tle->expr, ++maxRef);
+					ref_dqa_expr(info, arg_sortcl, maxRef);
 				}
 			}
 		}
 	}
-	else if (info->dqas_num < 1)
-		return INVALID_DQA;
 
 	info->dqa_group_clause = list_concat(list_copy(root->parse->groupClause),
-										 info->dqa_group_clause);
+	                                     info->dqa_group_clause);
 	info->maxref = maxRef;
-	ctx->target = ctarget;
-	ctx->partial_grouping_target = cpartial_grouping_target;
+	info->target = ctarget;
+	info->partial_grouping_target = cpartial_grouping_target;
+}
 
-	return ret;
+/*
+ *
+ * fetch all mpp dqas path required information
+ *
+ * cdb_distinct_info is return value
+ * info->input_target: subpath targetlist + all DISTINCT expr
+ *
+ *       dqa_group_clause: GROUP BY/ORDER BY clause + DISTINCT expr clause
+ *
+ *       distinct_ref: an array for only record DISTINCT expr reference index
+ *       for splitorderagg, it require split tuple depends on each DISTINCT expr
+ *       this array give a hint for that
+ *
+ *       maxref: after analyze the final maxref value
+ *       if we want to add tuplesplitid expr, we need maxref to also add the expr
+ *       into group by
+ */
+static void
+fetch_single_dqa_info(PlannerInfo *root,
+                      Path *path,
+                      cdb_agg_planning_context *ctx,
+                      cdb_distinct_info *info)
+{
+	Index		maxRef;
+
+	/* Prepare a modifiable copy of the input path target */
+	info->input_target = copy_pathtarget(path->pathtarget);
+	maxRef = 0;
+	if (info->input_target->sortgrouprefs)
+	{
+		for (int idx = 0; idx < list_length(info->input_target->exprs); idx++)
+		{
+			if (info->input_target->sortgrouprefs[idx] > maxRef)
+				maxRef = info->input_target->sortgrouprefs[idx];
+		}
+	}
+	else
+		info->input_target->sortgrouprefs = (Index *) palloc0(list_length(info->input_target->exprs) * sizeof(Index));
+
+	Aggref	   *aggref = list_nth(ctx->agg_costs->distinctAggrefs, 0);
+	SortGroupClause *arg_sortcl;
+	SortGroupClause *sortcl = NULL;
+	TargetEntry *arg_tle;
+	int			idx = 0;
+	ListCell   *lcc;
+
+	arg_sortcl = (SortGroupClause *) linitial(aggref->aggdistinct);
+	arg_tle = get_sortgroupref_tle(arg_sortcl->tleSortGroupRef, aggref->args);
+
+	/* Now find this expression in the sub-path's target list */
+	idx = 0;
+	foreach(lcc, info->input_target->exprs)
+	{
+		Expr		*expr = lfirst(lcc);
+
+		if (equal(expr, arg_tle->expr))
+			break;
+		idx++;
+	}
+
+	if (idx == list_length(info->input_target->exprs))
+		add_column_to_pathtarget(info->input_target, arg_tle->expr, ++maxRef);
+	else if (info->input_target->sortgrouprefs[idx] == 0)
+		info->input_target->sortgrouprefs[idx] = ++maxRef;
+
+	sortcl = copyObject(arg_sortcl);
+	sortcl->tleSortGroupRef = info->input_target->sortgrouprefs[idx];
+	sortcl->hashable = true;	/* we verified earlier that it's hashable */
+
+	info->dqa_group_clause = lappend(info->dqa_group_clause, sortcl);
+
+
+	info->dqa_group_clause = list_concat(list_copy(root->parse->groupClause),
+	                                     info->dqa_group_clause);
 }
 
 /*
@@ -671,7 +804,8 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	                                cxt->dNumGroups * getgpsegmentCount(),
 	                                &hash_info,
 	                                info->dqas_ref_bm,
-	                                info->dqas_num);
+	                                info->dqas_num,
+	                                false);
 
 	CdbPathLocus_MakeStrewn(&path->locus, numsegments);
 	distinct_locus = cdb_choose_grouping_locus(root, path,
@@ -699,7 +833,7 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	path = (Path *) create_agg_path(root,
 	                                output_rel,
 	                                path,
-	                                strip_aggdistinct(cxt->partial_grouping_target),
+	                                strip_aggdistinct(info->partial_grouping_target),
 	                                root->parse->groupClause ? AGG_HASHED : AGG_PLAIN,
 	                                AGGSPLIT_INITIAL_SERIAL | AGGSPLIT_DEDUPLICATED,
 	                                false, /* streaming */
@@ -722,7 +856,7 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	path = (Path *) create_agg_path(root,
 	                                output_rel,
 	                                path,
-	                                cxt->target,
+	                                info->target,
 	                                root->parse->groupClause ? AGG_HASHED : AGG_PLAIN,
 	                                AGGSPLIT_FINAL_DESERIAL | AGGSPLIT_DEDUPLICATED,
 	                                false, /* streaming */
@@ -732,6 +866,18 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	                                cxt->dNumGroups,
 	                                &hash_info);
 
+
+	path = (Path *) create_split_agg_path(root,
+	                                      output_rel,
+	                                      path,
+	                                      cxt->target,
+	                                      root->parse->groupClause,
+	                                      cxt->agg_final_costs, /* FIXME */
+	                                      0,
+	                                      &hash_info,
+	                                      NULL,
+	                                      0,
+	                                      true);
 	add_path(output_rel, path);
 }
 

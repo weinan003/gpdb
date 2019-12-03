@@ -1679,6 +1679,7 @@ typedef struct SplitTupleId
 typedef struct ShadowExpr
 {
 	Expr    xpr;
+	int     idx;
 	Expr    *expr;
 } ShadowExpr;
 #endif   /* PRIMNODES_H */

@@ -1130,6 +1130,7 @@ typedef struct Agg
 
 	int			numDisCols;
 	AttrNumber	*distColIdx;
+	bool        shadow_elimit;
 } Agg;
 
 /* ----------------

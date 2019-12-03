@@ -1399,6 +1399,7 @@ _readShadowExpr(void)
 {
 	READ_LOCALS(ShadowExpr);
 
+	READ_INT_FIELD(idx);
 	READ_NODE_FIELD(expr);
 
 	READ_DONE();

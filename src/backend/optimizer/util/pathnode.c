@@ -4102,7 +4102,8 @@ AggPath *create_split_agg_path(PlannerInfo *root,
 							   double numGroups,
 							   struct HashAggTableSizes *hash_info,
 							   Bitmapset *dqas_ref_bm,
-							   int dqas_num)
+							   int dqas_num,
+							   bool shadow_elimit)
 {
 	AggPath *apath = create_agg_path(root, rel, subpath,
 									 target,
@@ -4117,9 +4118,7 @@ AggPath *create_split_agg_path(PlannerInfo *root,
 
 	apath->dqas_ref_bm = bms_copy(dqas_ref_bm);
 	apath->dqas_num = dqas_num;
-
-	/* If the tuples are split, they are not distributed as before. */
-	CdbPathLocus_MakeStrewn(&apath->path.locus, subpath->locus.numsegments);
+	apath->shadow_elimit = shadow_elimit;
 
 	return apath;
 }

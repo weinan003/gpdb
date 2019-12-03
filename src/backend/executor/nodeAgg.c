@@ -260,6 +260,7 @@ static Bitmapset *find_unaggregated_cols(AggState *aggstate);
 static bool find_unaggregated_cols_walker(Node *node, Bitmapset **colnos);
 static TupleTableSlot *agg_retrieve_direct(AggState *aggstate);
 static TupleTableSlot *split_ordered_agg_retrieve_direct(AggState  *node);
+static TupleTableSlot *split_ordered_agg_shadow_elimit(AggState *node);
 static void agg_fill_hash_table(AggState *aggstate);
 static TupleTableSlot *agg_retrieve_hash_table(AggState *aggstate);
 static void ExecAggExplainEnd(PlanState *planstate, struct StringInfoData *buf);
@@ -1758,7 +1759,10 @@ ExecAgg(AggState *node)
 				result = agg_retrieve_hash_table(node);
 				break;
 			case AGG_SPLITORDERED:
-				result = split_ordered_agg_retrieve_direct(node);
+				if (((Agg *)(node->ss.ps.plan))->shadow_elimit)
+					result = split_ordered_agg_shadow_elimit(node);
+				else
+					result = split_ordered_agg_retrieve_direct(node);
 				break;
 			default:
 				result = agg_retrieve_direct(node);
@@ -1770,6 +1774,39 @@ ExecAgg(AggState *node)
 	}
 
 	return NULL;
+}
+
+static TupleTableSlot *
+split_ordered_agg_shadow_elimit(AggState *node)
+{
+	ExprContext *econtext;
+	TupleTableSlot *result;
+	SplitAggInfo *s_agg_info_p = &node->s_agg_info;
+	s_agg_info_p->outerslot = fetch_input_tuple(node);
+	econtext = node->ss.ps.ps_ExprContext;
+	Agg *plan = (Agg *)node->ss.ps.plan;
+
+	if (TupIsNull(s_agg_info_p->outerslot))
+	{
+		node->agg_done = TRUE;
+		return NULL;
+	}
+
+	slot_getallattrs(s_agg_info_p->outerslot);
+
+	int i;
+	while ((i = bms_first_member(node->grpbySet)) >= 0)
+	{
+		TargetEntry *tle = list_nth(plan->plan.targetlist, i);
+		ShadowExpr *expr = (ShadowExpr*) tle->expr;
+		slot_get_values(s_agg_info_p->outerslot)[expr->idx] = slot_get_values(s_agg_info_p->outerslot)[i];
+	}
+
+	econtext->ecxt_outertuple = s_agg_info_p->outerslot;
+	ResetExprContext(econtext);
+
+	result = project_aggregates(node);
+	return result;
 }
 
 static TupleTableSlot *
@@ -2948,9 +2985,27 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 
 	if (node->aggstrategy == AGG_SPLITORDERED)
 	{
-		for (int keyno = 0; keyno < node->numCols; keyno++)
+		if(node->shadow_elimit)
 		{
-			aggstate->grpbySet = bms_add_member(aggstate->grpbySet, node->grpColIdx[keyno]);
+			Plan * subplan = outerPlan(node);
+			int i = 0;
+			ListCell *lc;
+			foreach(lc, subplan->targetlist)
+			{
+				TargetEntry *tle = lfirst(lc);
+				if(IsA(tle->expr, ShadowExpr))
+				{
+					aggstate->grpbySet = bms_add_member(aggstate->grpbySet, i);
+				}
+				i ++;
+			}
+		}
+		else
+		{
+			for (int keyno = 0; keyno < node->numCols; keyno++)
+			{
+				aggstate->grpbySet = bms_add_member(aggstate->grpbySet, node->grpColIdx[keyno]);
+			}
 		}
 
 		aggstate->isnull_orig = (bool *) palloc0(sizeof(bool) * list_length(node->plan.targetlist));
