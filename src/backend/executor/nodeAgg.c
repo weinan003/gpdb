@@ -1799,7 +1799,8 @@ split_ordered_agg_shadow_elimit(AggState *node)
 	{
 		TargetEntry *tle = list_nth(plan->plan.targetlist, i);
 		ShadowExpr *expr = (ShadowExpr*) tle->expr;
-		slot_get_values(s_agg_info_p->outerslot)[expr->idx] = slot_get_values(s_agg_info_p->outerslot)[i];
+		if (!IS_SPECIAL_VARNO(expr->idx))
+			slot_get_values(s_agg_info_p->outerslot)[expr->idx] = slot_get_values(s_agg_info_p->outerslot)[i];
 	}
 
 	econtext->ecxt_outertuple = s_agg_info_p->outerslot;
