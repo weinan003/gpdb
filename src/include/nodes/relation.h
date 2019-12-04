@@ -1707,7 +1707,7 @@ typedef struct AggPath
 	bool		streaming;
 	Bitmapset	*dqas_ref_bm;
 	int			dqas_num;
-	bool        shadow_elimit;
+	int         *shadow_mapping;
 } AggPath;
 
 /*

@@ -4103,7 +4103,7 @@ AggPath *create_split_agg_path(PlannerInfo *root,
 							   struct HashAggTableSizes *hash_info,
 							   Bitmapset *dqas_ref_bm,
 							   int dqas_num,
-							   bool shadow_elimit)
+							   int *shadow_mapping)
 {
 	AggPath *apath = create_agg_path(root, rel, subpath,
 									 target,
@@ -4118,7 +4118,7 @@ AggPath *create_split_agg_path(PlannerInfo *root,
 
 	apath->dqas_ref_bm = bms_copy(dqas_ref_bm);
 	apath->dqas_num = dqas_num;
-	apath->shadow_elimit = shadow_elimit;
+	apath->shadow_mapping = shadow_mapping;
 
 	return apath;
 }

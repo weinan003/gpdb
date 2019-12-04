@@ -212,7 +212,7 @@ extern AggPath *create_split_agg_path(PlannerInfo *root,
                                       struct HashAggTableSizes *hash_info,
                                       Bitmapset *dqas_ref_bm,
                                       int dqas_num,
-                                      bool shadow_elimit);
+                                      int *shadow_mapping);
 
 extern AggPath *create_agg_path(PlannerInfo *root,
 				RelOptInfo *rel,

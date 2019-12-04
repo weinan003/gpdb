@@ -620,10 +620,12 @@ plan_tree_mutator(Node *node,
 			{
 				Agg		   *agg = (Agg *) node;
 				Agg		   *newagg;
+				int sz = list_length(agg->plan.targetlist);
 
 				FLATCOPY(newagg, agg, Agg);
 				PLANMUTATE(newagg, agg);
 				COPYARRAY(newagg, agg, numCols, grpColIdx);
+				COPYARRAY(newagg, agg, mappinglen, shadow_mapping);
 				return (Node *) newagg;
 			}
 			break;

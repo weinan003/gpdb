@@ -978,6 +978,17 @@ _outAgg(StringInfo str, const Agg *node)
 	WRITE_NODE_FIELD(groupingSets);
 	WRITE_NODE_FIELD(chain);
 	WRITE_BOOL_FIELD(streaming);
+	WRITE_INT_FIELD(numDisCols);
+	WRITE_BOOL_FIELD(shadow_elimit);
+	WRITE_INT_FIELD(mappinglen);
+
+	appendStringInfoString(str, " :distColIdx");
+	for (i = 0; i < node->numDisCols; i++)
+		appendStringInfo(str, " %d", node->distColIdx[i]);
+
+	appendStringInfoString(str, " :shadow_mapping");
+	for (i = 0; i < node->mappinglen; i++)
+		appendStringInfo(str, " %d", node->shadow_mapping[i]);
 }
 #endif /* COMPILING_BINARY_FUNCS */
 
@@ -1540,7 +1551,6 @@ _outShadowExpr(StringInfo str, const ShadowExpr *node)
 {
 	WRITE_NODE_TYPE("SHADOWEXPR");
 
-	WRITE_INT_FIELD(idx);
 	WRITE_NODE_FIELD(expr);
 }
 

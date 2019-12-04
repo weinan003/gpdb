@@ -2923,7 +2923,6 @@ _equalRoleSpec(const RoleSpec *a, const RoleSpec *b)
 static bool
 _equalShadowExpr(const ShadowExpr *a, const ShadowExpr *b)
 {
-	COMPARE_SCALAR_FIELD(idx);
 	COMPARE_NODE_FIELD(expr);
 
 	return true;

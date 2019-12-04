@@ -65,7 +65,7 @@ typedef struct
 
 	PathTarget *target;
 	PathTarget *partial_grouping_target;
-	PathTarget *target_without_shadow;
+	int        *shadow_mapping;
 } cdb_distinct_info;
 
 static void add_twostage_group_agg_path(PlannerInfo *root,
@@ -543,15 +543,14 @@ recognise_dqa_type(PlannerInfo *root,
 }
 
 static ShadowExpr*
-makeShadowExpr(Expr *expr,int idx)
+makeShadowExpr(Expr *expr)
 {
 	ShadowExpr *sexpr = makeNode(ShadowExpr);
 	sexpr->expr = expr;
-	sexpr->idx  = idx;
 	return sexpr;
 }
 
-static void
+static int
 mutateShadowExpr(Expr* expr, List *l)
 {
 	int i = 0;
@@ -561,7 +560,8 @@ mutateShadowExpr(Expr* expr, List *l)
 		Expr *pExpr = lfirst(lc1);
 		if(equal(expr, pExpr))
 		{
-			lfirst(lc1) = makeShadowExpr(pExpr, i);
+			lfirst(lc1) = makeShadowExpr(pExpr);
+			return i;
 		}
 		i ++;
 	}
@@ -594,6 +594,7 @@ fetch_multi_dqas_info(PlannerInfo *root,
 	PathTarget *cpartial_grouping_target = copy_pathtarget(ctx->partial_grouping_target);
 
 	info->input_target = copy_pathtarget(path->pathtarget);
+	info->shadow_mapping = palloc0(sizeof(int) * list_length(ctx->target->exprs));
 	maxRef = 0;
 	if (info->input_target->sortgrouprefs)
 	{
@@ -665,13 +666,14 @@ fetch_multi_dqas_info(PlannerInfo *root,
 				{
 					/* DQA expr also in GROUP BY clause */
 					Expr *dqa_expr = (Expr *)lfirst(dqa_lc);
-					lfirst(dqa_lc) = makeShadowExpr(dqa_expr, dqa_lc_idx);
+					lfirst(dqa_lc) = makeShadowExpr(dqa_expr);
 
 					mutateShadowExpr(dqa_expr, cpartial_grouping_target->exprs);
-					mutateShadowExpr(dqa_expr, ctarget->exprs);
+					int shadow_idx = mutateShadowExpr(dqa_expr, ctarget->exprs);
 
 					add_column_to_pathtarget(cpartial_grouping_target, arg_tle->expr, 0);
 					add_column_to_pathtarget(ctarget, arg_tle->expr, 0);
+					info->shadow_mapping[shadow_idx] = list_length(ctarget->exprs) - 1;
 
 					add_column_to_pathtarget(info->input_target, arg_tle->expr, ++maxRef);
 					ref_dqa_expr(info, arg_sortcl, maxRef);
@@ -805,7 +807,7 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	                                &hash_info,
 	                                info->dqas_ref_bm,
 	                                info->dqas_num,
-	                                false);
+	                                NIL);
 
 	CdbPathLocus_MakeStrewn(&path->locus, numsegments);
 	distinct_locus = cdb_choose_grouping_locus(root, path,
@@ -866,18 +868,22 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	                                cxt->dNumGroups,
 	                                &hash_info);
 
+	/* elimit ShadowExpr */
+	if(list_length(cxt->target->exprs) < list_length(info->target->exprs))
+	{
+		path = (Path *) create_split_agg_path(root,
+		                                      output_rel,
+		                                      path,
+		                                      cxt->target,
+		                                      root->parse->groupClause,
+		                                      cxt->agg_final_costs, /* FIXME */
+		                                      0,
+		                                      &hash_info,
+		                                      NULL,
+		                                      0,
+		                                      info->shadow_mapping);
+	}
 
-	path = (Path *) create_split_agg_path(root,
-	                                      output_rel,
-	                                      path,
-	                                      cxt->target,
-	                                      root->parse->groupClause,
-	                                      cxt->agg_final_costs, /* FIXME */
-	                                      0,
-	                                      &hash_info,
-	                                      NULL,
-	                                      0,
-	                                      true);
 	add_path(output_rel, path);
 }
 

@@ -2712,7 +2712,8 @@ typedef struct AggState
 	bool		ps_TupFromTlist;
 
 	bool		*isnull_orig;
-	Bitmapset	*grpbySet;
+	Bitmapset   *grpbySet;
+	List        *idxLst;
 	SplitAggInfo	s_agg_info;
 } AggState;
 

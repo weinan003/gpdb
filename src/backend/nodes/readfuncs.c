@@ -1399,7 +1399,6 @@ _readShadowExpr(void)
 {
 	READ_LOCALS(ShadowExpr);
 
-	READ_INT_FIELD(idx);
 	READ_NODE_FIELD(expr);
 
 	READ_DONE();
@@ -3094,7 +3093,10 @@ _readAgg(void)
 	READ_NODE_FIELD(chain);
 	READ_BOOL_FIELD(streaming);
 	READ_INT_FIELD(numDisCols);
+	READ_BOOL_FIELD(shadow_elimit);
+	READ_INT_FIELD(mappinglen);
 	READ_ATTRNUMBER_ARRAY(distColIdx, local_node->numDisCols);
+	READ_INT_ARRAY(shadow_mapping, local_node->mappinglen);
 
 	READ_DONE();
 }

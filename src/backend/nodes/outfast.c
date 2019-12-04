@@ -409,7 +409,10 @@ _outAgg(StringInfo str, Agg *node)
 	WRITE_NODE_FIELD(chain);
 	WRITE_BOOL_FIELD(streaming);
 	WRITE_INT_FIELD(numDisCols);
+	WRITE_BOOL_FIELD(shadow_elimit);
+	WRITE_INT_FIELD(mappinglen);
 	WRITE_INT_ARRAY(distColIdx, node->numDisCols, AttrNumber);
+	WRITE_INT_ARRAY(shadow_mapping, node->mappinglen, int);
 }
 
 static void

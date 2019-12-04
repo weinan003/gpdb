@@ -1784,7 +1784,6 @@ split_ordered_agg_shadow_elimit(AggState *node)
 	SplitAggInfo *s_agg_info_p = &node->s_agg_info;
 	s_agg_info_p->outerslot = fetch_input_tuple(node);
 	econtext = node->ss.ps.ps_ExprContext;
-	Agg *plan = (Agg *)node->ss.ps.plan;
 
 	if (TupIsNull(s_agg_info_p->outerslot))
 	{
@@ -1794,13 +1793,17 @@ split_ordered_agg_shadow_elimit(AggState *node)
 
 	slot_getallattrs(s_agg_info_p->outerslot);
 
-	int i;
-	while ((i = bms_first_member(node->grpbySet)) >= 0)
+	Datum *values = slot_get_values(s_agg_info_p->outerslot);
+	bool  *isnulls = slot_get_isnull(s_agg_info_p->outerslot);
+	ListCell *lc;
+	int idx, targetIdx;
+	foreach(lc, node->idxLst)
 	{
-		TargetEntry *tle = list_nth(plan->plan.targetlist, i);
-		ShadowExpr *expr = (ShadowExpr*) tle->expr;
-		if (!IS_SPECIAL_VARNO(expr->idx))
-			slot_get_values(s_agg_info_p->outerslot)[expr->idx] = slot_get_values(s_agg_info_p->outerslot)[i];
+		idx = lfirst_int(lc);
+		Agg *agg = (Agg *)node->ss.ps.plan;
+		targetIdx = agg->shadow_mapping[idx];
+		values[targetIdx] = values[idx];
+		isnulls[targetIdx] = false;
 	}
 
 	econtext->ecxt_outertuple = s_agg_info_p->outerslot;
@@ -2988,17 +2991,12 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 	{
 		if(node->shadow_elimit)
 		{
-			Plan * subplan = outerPlan(node);
-			int i = 0;
-			ListCell *lc;
-			foreach(lc, subplan->targetlist)
+			int sz = list_length(node->plan.targetlist);
+
+			for(int i = 0; i < sz; i++)
 			{
-				TargetEntry *tle = lfirst(lc);
-				if(IsA(tle->expr, ShadowExpr))
-				{
-					aggstate->grpbySet = bms_add_member(aggstate->grpbySet, i);
-				}
-				i ++;
+				if(node->shadow_mapping[i])
+					aggstate->idxLst = lappend_int(aggstate->idxLst, i);
 			}
 		}
 		else
@@ -3007,9 +3005,8 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 			{
 				aggstate->grpbySet = bms_add_member(aggstate->grpbySet, node->grpColIdx[keyno]);
 			}
+			aggstate->isnull_orig = (bool *) palloc0(sizeof(bool) * list_length(node->plan.targetlist));
 		}
-
-		aggstate->isnull_orig = (bool *) palloc0(sizeof(bool) * list_length(node->plan.targetlist));
 	}
 
 	/*
@@ -3810,8 +3807,15 @@ ExecEagerFreeAgg(AggState *node)
 
 	if (((Agg *)node->ss.ps.plan)->aggstrategy == AGG_SPLITORDERED)
 	{
-		bms_free(node->grpbySet);
-		pfree(node->isnull_orig);
+		if(((Agg *)node->ss.ps.plan)->shadow_elimit)
+		{
+			list_free(node->idxLst);
+		}
+		else
+		{
+			bms_free(node->grpbySet);
+			pfree(node->isnull_orig);
+		}
 	}
 
 	/*

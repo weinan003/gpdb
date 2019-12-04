@@ -1129,8 +1129,10 @@ typedef struct Agg
 	bool		streaming;
 
 	int			numDisCols;
-	AttrNumber	*distColIdx;
 	bool        shadow_elimit;
+	int         mappinglen;
+	AttrNumber	*distColIdx;
+	int         *shadow_mapping;
 } Agg;
 
 /* ----------------

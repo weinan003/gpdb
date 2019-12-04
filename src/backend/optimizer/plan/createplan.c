@@ -1797,7 +1797,16 @@ create_agg_plan(PlannerInfo *root, AggPath *best_path)
 		plan->distColIdx[j] = te->resno;
 		j++;
 	}
-	plan->shadow_elimit = best_path->shadow_elimit;
+	plan->mappinglen = sizeof(int ) * list_length(tlist);
+	plan->shadow_mapping = palloc0( plan->mappinglen);
+	if(best_path->shadow_mapping)
+	{
+		plan->shadow_elimit = true;
+		memcpy(plan->shadow_mapping, best_path->shadow_mapping, plan->mappinglen);
+	}
+	else
+		plan->shadow_elimit = false;
+
 
 	return plan;
 }

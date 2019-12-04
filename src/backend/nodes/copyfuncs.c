@@ -1168,7 +1168,10 @@ _copyAgg(const Agg *from)
 	COPY_NODE_FIELD(chain);
 	COPY_SCALAR_FIELD(streaming);
 	COPY_SCALAR_FIELD(numDisCols);
+	COPY_SCALAR_FIELD(shadow_elimit);
+	COPY_SCALAR_FIELD(mappinglen);
 	COPY_POINTER_FIELD(distColIdx, from->numDisCols * sizeof(AttrNumber));
+	COPY_POINTER_FIELD(shadow_mapping, from->mappinglen * sizeof(int));
 
 	return newnode;
 }
@@ -5450,7 +5453,6 @@ _copyShadowExpr(const ShadowExpr *from)
 {
 	ShadowExpr * newnode = makeNode(ShadowExpr);
 
-	COPY_SCALAR_FIELD(idx);
 	COPY_NODE_FIELD(expr);
 
 	return newnode;
