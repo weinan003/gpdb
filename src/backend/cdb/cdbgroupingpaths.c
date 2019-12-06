@@ -212,7 +212,13 @@ add_twostage_group_agg_path(PlannerInfo *root,
 		if (!analyze_dqas(root, path, ctx, &input_target, &dqa_group_clause))
 			return;
 
-		path = (Path *) create_projection_path(root, path->parent, path, input_target);
+        /*
+         * If subpath is projection capable, we do not want to generate
+         * projection plan. The reason is that the projection plan does not
+         * constrain child tlist when it create subplan. Thus, GROUP BY expr
+         * may not find in scan targetlist.
+         */
+        path = apply_projection_to_path(root, path->parent, path, input_target);
 
 		distinct_locus = cdb_choose_grouping_locus(root, path,
 												   input_target,
@@ -532,7 +538,13 @@ add_single_dqa_hash_agg_path(PlannerInfo *root,
 							   &hash_info))
 		return;	/* don't try to hash */
 
-	path = (Path *) create_projection_path(root, path->parent, path, input_target);
+	/*
+	 * If subpath is projection capable, we do not want to generate
+	 * projection plan. The reason is that the projection plan does not
+	 * constrain child tlist when it create subplan. Thus, GROUP BY expr
+	 * may not find in scan targetlist.
+	 */
+	 path = apply_projection_to_path(root, path->parent, path, input_target);
 
 	distinct_locus = cdb_choose_grouping_locus(root, path,
 											   input_target,
