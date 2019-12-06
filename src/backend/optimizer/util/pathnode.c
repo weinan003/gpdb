@@ -4094,6 +4094,82 @@ create_agg_path(PlannerInfo *root,
 }
 
 /*
+ * create_tup_split_path
+ *	  Creates a pathnode that represents performing TupleSplit
+ *
+ * 'rel' is the parent relation associated with the result
+ * 'subpath' is the path representing the source of data
+ * 'target' is the PathTarget to be computed
+ * 'groupClause' is a list of SortGroupClause's representing the grouping
+ * 'numGroups' is the estimated number of groups (1 if not grouping)
+ * 'bitmapset' is the bitmap of DQA expr Index in PathTarget
+ * 'bmSz' is the number of bitmapset size
+ */
+AggPath *
+create_tup_split_path(PlannerInfo *root,
+                      RelOptInfo *rel,
+                      Path *subpath,
+                      PathTarget *target,
+                      List *groupClause,
+                      double numGroups,
+                      Bitmapset *bitmapset,
+                      int bmSz)
+{
+    AggPath * path = create_agg_path(root, rel,
+                    subpath, target,
+                    AGG_TUP_SPLIT,
+                    AGGSPLIT_SIMPLE,
+                    false,
+                    groupClause,
+                    NIL,
+                    NULL,
+                    numGroups,
+                    NULL);
+
+    path->dqas_ref_bm = bms_copy(bitmapset);
+    path->dqas_num = bmSz;
+
+    return path;
+
+}
+
+/*
+ * create_shadow_elimit_path
+ *	  Creates a pathnode that represents performing ShadowElimit
+ *
+ * 'rel' is the parent relation associated with the result
+ * 'subpath' is the path representing the source of data
+ * 'target' is the PathTarget to be computed
+ * 'numGroups' is the estimated number of groups (1 if not grouping)
+ * 'mapSz' is the length of shadow_map
+ * 'shadow_map' is the an array to mapping ShadowExpr and its relavent Expr Index
+ */
+AggPath *
+create_shadow_elimit_path(PlannerInfo *root,
+                         RelOptInfo *rel,
+                         Path *subpath,
+                         PathTarget *target,
+                         double numGroups,
+                         int mapSz,
+                         int *shadow_map)
+{
+    AggPath * path = create_agg_path(root, rel,
+                                     subpath, target,
+                                     AGG_SHADOWELIMIT,
+                                     AGGSPLIT_SIMPLE,
+                                     false,
+                                     NULL,
+                                     NIL,
+                                     NULL,
+                                     numGroups,
+                                     NULL);
+
+    path->shadowMap = shadow_map;
+    path->mapSz = mapSz;
+
+    return path;
+}
+/*
  * create_groupingsets_path
  *	  Creates a pathnode that represents performing GROUPING SETS aggregation
  *

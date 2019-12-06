@@ -1656,4 +1656,9 @@ typedef struct PartListNullTestExpr
 	NullTestType nulltesttype;	/* IS NULL, IS NOT NULL */
 } PartListNullTestExpr;
 
+typedef struct ShadowExpr
+{
+	Expr    xpr;
+	Expr    *expr;
+} ShadowExpr;
 #endif   /* PRIMNODES_H */

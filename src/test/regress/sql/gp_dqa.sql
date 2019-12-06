@@ -63,6 +63,9 @@ explain (costs off) select count(distinct dqa_t1.dt) from dqa_t1, dqa_t2 where d
 select count(distinct dqa_t1.dt) from dqa_t1, dqa_t2 where dqa_t1.c = dqa_t2.c group by dqa_t2.dt;
 explain (costs off) select count(distinct dqa_t1.dt) from dqa_t1, dqa_t2 where dqa_t1.c = dqa_t2.c group by dqa_t2.dt;
 
+-- multidqa with groupby and order by
+select sum(distinct d), count(distinct i), count(distinct c),i,c from dqa_t1 group by i,c order by i,c;
+explain (costs off) select sum(distinct d), count(distinct i), count(distinct c),i,c from dqa_t1 group by i,c order by i,c;
 
 -- MPP-19037
 drop table if exists fact_route_aggregation;

@@ -408,6 +408,12 @@ _outAgg(StringInfo str, Agg *node)
 	WRITE_NODE_FIELD(groupingSets);
 	WRITE_NODE_FIELD(chain);
 	WRITE_BOOL_FIELD(streaming);
+
+	WRITE_INT_FIELD(numDisCols);
+	WRITE_INT_ARRAY(distColIdx, node->numDisCols, AttrNumber);
+
+	WRITE_INT_FIELD(mapSz);
+	WRITE_INT_ARRAY(shadowMap, node->mapSz, int);
 }
 
 static void
@@ -1525,6 +1531,9 @@ _outNode(StringInfo str, void *obj)
 			case T_GroupId:
 				_outGroupId(str, obj);
 				break;
+		    case T_ShadowExpr:
+		        _outShadowExpr(str, obj);
+                break;
 			case T_WindowFunc:
 				_outWindowFunc(str, obj);
 				break;

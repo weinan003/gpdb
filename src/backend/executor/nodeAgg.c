@@ -261,6 +261,8 @@ static bool find_unaggregated_cols_walker(Node *node, Bitmapset **colnos);
 static TupleTableSlot *agg_retrieve_direct(AggState *aggstate);
 static void agg_fill_hash_table(AggState *aggstate);
 static TupleTableSlot *agg_retrieve_hash_table(AggState *aggstate);
+static TupleTableSlot *split_tup_agg_retrieve_direct(AggState  *node);
+static TupleTableSlot *shadow_elimit_agg_retrieve_direct(AggState *node);
 static void ExecAggExplainEnd(PlanState *planstate, struct StringInfoData *buf);
 static void ExecEagerFreeAgg(AggState *node);
 static TupleTableSlot *agg_retrieve_hash_table_internal(AggState *aggstate);
@@ -1756,6 +1758,12 @@ ExecAgg(AggState *node)
 					agg_fill_hash_table(node);
 				result = agg_retrieve_hash_table(node);
 				break;
+		    case AGG_TUP_SPLIT:
+		        result = split_tup_agg_retrieve_direct(node);
+                break;
+		    case AGG_SHADOWELIMIT:
+		        result = shadow_elimit_agg_retrieve_direct(node);
+                break;
 			default:
 				result = agg_retrieve_direct(node);
 				break;
@@ -1766,6 +1774,96 @@ ExecAgg(AggState *node)
 	}
 
 	return NULL;
+}
+static TupleTableSlot *
+shadow_elimit_agg_retrieve_direct(AggState *node)
+{
+    ExprContext *econtext;
+    TupleTableSlot *result;
+    SplitAggInfo *s_agg_info_p = &node->s_agg_info;
+    s_agg_info_p->outerslot = fetch_input_tuple(node);
+    econtext = node->ss.ps.ps_ExprContext;
+
+    if (TupIsNull(s_agg_info_p->outerslot))
+    {
+        node->agg_done = TRUE;
+        return NULL;
+    }
+
+    slot_getallattrs(s_agg_info_p->outerslot);
+
+    Datum *values = slot_get_values(s_agg_info_p->outerslot);
+    bool  *isnulls = slot_get_isnull(s_agg_info_p->outerslot);
+    ListCell *lc;
+    int idx, targetIdx;
+    foreach(lc, node->shadow_idx)
+    {
+        idx = lfirst_int(lc);
+        Agg *agg = (Agg *)node->ss.ps.plan;
+        targetIdx = agg->shadowMap[idx];
+        values[targetIdx] = values[idx];
+        isnulls[targetIdx] = false;
+    }
+
+    econtext->ecxt_outertuple = s_agg_info_p->outerslot;
+    ResetExprContext(econtext);
+
+    result = project_aggregates(node);
+    return result;
+}
+
+/*
+ * split_tup_agg_retrieve_direct
+ * Split tuple according to DQA expr
+ */
+static TupleTableSlot *
+split_tup_agg_retrieve_direct(AggState *node)
+{
+    ExprContext *econtext;
+    SplitAggInfo *s_agg_info_p = &node->s_agg_info;
+    TupleTableSlot *result;
+    econtext = node->ss.ps.ps_ExprContext;
+    Agg *plan = (Agg *)node->ss.ps.plan;
+
+    if (s_agg_info_p->idx == 0)
+    {
+        s_agg_info_p->outerslot = fetch_input_tuple(node);
+
+        if (TupIsNull(s_agg_info_p->outerslot))
+        {
+            node->agg_done = TRUE;
+            return NULL;
+        }
+
+        /* translate to virtual tuple */
+        slot_getallattrs(s_agg_info_p->outerslot);
+
+        /* store original tupleslot isnull array */
+        memcpy(node->isnull_orig, s_agg_info_p->outerslot->PRIVATE_tts_isnull,
+               s_agg_info_p->outerslot->PRIVATE_tts_nvalid * sizeof(bool));
+    }
+
+    /* reset isnull */
+    bool *isnull = slot_get_isnull(s_agg_info_p->outerslot);
+    memcpy(isnull, node->isnull_orig, s_agg_info_p->outerslot->PRIVATE_tts_nvalid);
+
+    /* populate isnull if the column belone to other distinct and is not a group by */
+    for (Index idx = 0; idx < plan->numDisCols; idx++)
+    {
+        if (!(plan->distColIdx[idx] == plan->distColIdx[s_agg_info_p->idx]
+                || bms_is_member(plan->distColIdx[s_agg_info_p->idx],
+                                 node->grpbySet)))
+            isnull[plan->distColIdx[idx] - 1] = true;
+    }
+
+    s_agg_info_p->idx = (s_agg_info_p->idx + 1) % plan->numDisCols;
+
+    econtext->ecxt_outertuple = s_agg_info_p->outerslot;
+    ResetExprContext(econtext);
+
+    result = project_aggregates(node);
+
+    return result;
 }
 
 /*
@@ -2908,7 +3006,28 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 	aggstate->mem_manager.manager = aggstate;
 	aggstate->mem_manager.realloc_ratio = 1;
 
-	return aggstate;
+
+    if (node->aggstrategy == AGG_TUP_SPLIT)
+    {
+        for (int keyno = 0; keyno < node->numCols; keyno++)
+        {
+            aggstate->grpbySet = bms_add_member(aggstate->grpbySet, node->grpColIdx[keyno]);
+        }
+        aggstate->isnull_orig = (bool *) palloc0(sizeof(bool) * list_length(outerPlan(node)->targetlist));
+    }
+    else if (node->aggstrategy == AGG_SHADOWELIMIT)
+    {
+            int sz = node->mapSz;
+
+            for(int i = 0; i < sz; i++)
+            {
+                if(node->shadowMap[i])
+                    aggstate->shadow_idx = lappend_int(aggstate->shadow_idx, i);
+            }
+    }
+
+
+    return aggstate;
 }
 
 /*
@@ -3412,11 +3531,21 @@ ExecEndAgg(AggState *node)
 	for (setno = 0; setno < numGroupingSets; setno++)
 		ReScanExprContext(node->aggcontexts[setno]);
 
-	/*
-	 * We don't actually free any ExprContexts here (see comment in
-	 * ExecFreeExprContext), just unlinking the output one from the plan node
-	 * suffices.
-	 */
+    if (((Agg *)node->ss.ps.plan)->aggstrategy == AGG_TUP_SPLIT)
+    {
+        bms_free(node->grpbySet);
+        pfree(node->isnull_orig);
+    }
+    else if (((Agg *)node->ss.ps.plan)->aggstrategy == AGG_SHADOWELIMIT)
+    {
+        list_free(node->shadow_idx);
+    }
+
+    /*
+     * We don't actually free any ExprContexts here (see comment in
+     * ExecFreeExprContext), just unlinking the output one from the plan node
+     * suffices.
+     */
 	ExecFreeExprContext(&node->ss.ps);
 
 	/* clean up tuple table */

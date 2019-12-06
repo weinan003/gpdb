@@ -1359,6 +1359,14 @@ ExplainNode(PlanState *planstate, List *ancestors,
 						pname = "HashAggregate";
 						strategy = "Hashed";
 						break;
+				    case AGG_TUP_SPLIT:
+                        pname = "TupleSplit";
+                        strategy = "Plain";
+                        break;
+				    case AGG_SHADOWELIMIT:
+                        pname = "ShadowElimit";
+                        strategy = "Plain";
+                        break;
 					default:
 						pname = "Aggregate ???";
 						strategy = "???";
@@ -2564,7 +2572,13 @@ show_agg_keys(AggState *astate, List *ancestors,
 {
 	Agg		   *plan = (Agg *) astate->ss.ps.plan;
 
-	if (plan->numCols > 0 || plan->groupingSets)
+    if (plan->numDisCols)
+        show_sort_group_keys(outerPlanState(astate), "Split by Col",
+                             plan->numDisCols, plan->distColIdx,
+                             NULL, NULL, NULL,
+                             ancestors, es);
+
+  if (plan->numCols > 0 || plan->groupingSets)
 	{
 		/* The key columns refer to the tlist of the child plan */
 		ancestors = lcons(astate, ancestors);
