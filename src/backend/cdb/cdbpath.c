@@ -416,6 +416,41 @@ cdbpath_create_motion_path(PlannerInfo *root,
 	 * materialize nodes on top of motion nodes
 	 */
 
+
+    if(IsA(subpath,SubqueryScanPath)
+       && CdbPathLocus_IsBottleneck(locus)
+       && !subpath->pathkeys
+       && ((SubqueryScanPath *)subpath)->subpath->pathkeys)
+    {
+        /*
+         * In gpdb, when a Gather Motion upon SubqueryScan, it is hard to keep
+         * data order information. Since subquery pathkey can not pull
+         * up if its parent node does not have the same EquivalenceClass.
+         *
+         * e.g. create a view with an ORDER BY:
+         *
+         * CREATE VIEW v AS SELECT va, vn FROM sourcetable ORDER BY vn;
+         *
+         * and query it:
+         *
+         * SELECT va FROM v_sourcetable;
+         *
+         * So, push down Gather Motion if the SubqueryScan dose not have
+         * pathkey but SubqueryScan's subpath has.
+         *
+         */
+        SubqueryScanPath *subqueryScanPath = (SubqueryScanPath *)subpath;
+        subpath = subqueryScanPath->subpath;
+
+        subqueryScanPath->subpath = cdbpath_create_motion_path(root,
+                                           subpath,
+                                           subpath->pathkeys,
+                                           true,
+                                           locus);
+        subqueryScanPath->path.locus = locus;
+        return (Path *) subqueryScanPath;
+    }
+
 	/* Create CdbMotionPath node. */
 	pathnode = makeNode(CdbMotionPath);
 	pathnode->path.pathtype = T_Motion;
