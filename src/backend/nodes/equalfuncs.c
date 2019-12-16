@@ -2921,9 +2921,9 @@ _equalRoleSpec(const RoleSpec *a, const RoleSpec *b)
 static bool
 _equalShadowExpr(const ShadowExpr *a, const ShadowExpr *b)
 {
-    COMPARE_NODE_FIELD(expr);
+	COMPARE_NODE_FIELD(expr);
 
-    return true;
+	return true;
 }
 
 /*
@@ -3745,9 +3745,9 @@ equal(const void *a, const void *b)
 		case T_RoleSpec:
 			retval = _equalRoleSpec(a, b);
 			break;
-	    case T_ShadowExpr:
-	        retval = _equalShadowExpr(a, b);
-            break;
+		case T_ShadowExpr:
+			retval = _equalShadowExpr(a, b);
+			break;
 
 		default:
 			elog(ERROR, "unrecognized node type: %d",

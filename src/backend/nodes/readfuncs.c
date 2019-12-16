@@ -1400,11 +1400,11 @@ _readGroupId(void)
 static ShadowExpr*
 _readShadowExpr(void)
 {
-    READ_LOCALS(ShadowExpr);
+	READ_LOCALS(ShadowExpr);
 
-    READ_NODE_FIELD(expr);
+	READ_NODE_FIELD(expr);
 
-    READ_DONE();
+	READ_DONE();
 }
 
 /*
@@ -3087,7 +3087,7 @@ _readAgg(void)
 	READ_ATTRNUMBER_ARRAY(distColIdx, local_node->numDisCols);
 
 	READ_INT_FIELD(mapSz);
-    READ_INT_ARRAY(shadowMap, local_node->mapSz);
+	READ_INT_ARRAY(shadowMap, local_node->mapSz);
 
 	READ_DONE();
 }
@@ -4084,7 +4084,7 @@ parseNodeString(void)
 	else if (MATCH("GROUPID", 7))
 		return_value = _readGroupId();
 	else if (MATCH("SHADOWEXPR", 10))
-	    return_value = _readShadowExpr();
+		return_value = _readShadowExpr();
 	else if (MATCH("WINDOWFUNC", 10))
 		return_value = _readWindowFunc();
 	else if (MATCH("ARRAYREF", 8))

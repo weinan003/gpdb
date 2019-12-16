@@ -908,7 +908,7 @@ typedef enum AggStrategy
 	AGG_SORTED,					/* grouped agg, input must be sorted */
 	AGG_HASHED,					/* grouped agg, use internal hashtable */
 	AGG_TUP_SPLIT,              /* split agg, use internal multidqa tuple split */
-	AGG_SHADOWELIMIT            /* shadow elimite agg, use multidqa result elimit shadow expr */
+	AGG_SHADOWELIMINATE            /* shadow eliminate agg, use multidqa result eliminate shadow expr */
 } AggStrategy;
 
 /*

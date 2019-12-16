@@ -980,14 +980,14 @@ _outAgg(StringInfo str, const Agg *node)
 	WRITE_BOOL_FIELD(streaming);
 
 	WRITE_INT_FIELD(numDisCols);
-    appendStringInfoString(str, " :distColIdx");
-    for (i = 0; i < node->numDisCols; i++)
-        appendStringInfo(str, " %d", node->distColIdx[i]);
+	appendStringInfoString(str, " :distColIdx");
+	for (i = 0; i < node->numDisCols; i++)
+		appendStringInfo(str, " %d", node->distColIdx[i]);
 
 	WRITE_INT_FIELD(mapSz);
-    appendStringInfoString(str, " :shadowMap");
-    for (i = 0; i < node->mapSz; i++)
-        appendStringInfo(str, " %d", node->shadowMap[i]);
+	appendStringInfoString(str, " :shadowMap");
+	for (i = 0; i < node->mapSz; i++)
+		appendStringInfo(str, " %d", node->shadowMap[i]);
 
 }
 #endif /* COMPILING_BINARY_FUNCS */
@@ -1541,9 +1541,9 @@ _outGroupId(StringInfo str, const GroupId *node)
 static void
 _outShadowExpr(StringInfo str, const ShadowExpr *node)
 {
-    WRITE_NODE_TYPE("SHADOWEXPR");
+	WRITE_NODE_TYPE("SHADOWEXPR");
 
-    WRITE_NODE_FIELD(expr);
+	WRITE_NODE_FIELD(expr);
 }
 
 static void
@@ -5459,9 +5459,9 @@ outNode(StringInfo str, const void *obj)
 			case T_GroupId:
 				_outGroupId(str, obj);
 				break;
-            case T_ShadowExpr:
-                _outShadowExpr(str, obj);
-                break;
+			case T_ShadowExpr:
+				_outShadowExpr(str, obj);
+				break;
 			case T_WindowFunc:
 				_outWindowFunc(str, obj);
 				break;

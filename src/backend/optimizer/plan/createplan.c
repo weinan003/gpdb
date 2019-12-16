@@ -1740,27 +1740,25 @@ create_agg_plan(PlannerInfo *root, AggPath *best_path)
 	plan->plan.flow = copyObject(subplan->flow);
 
 	if (plan->aggstrategy == AGG_TUP_SPLIT)
-    {
-        int i, j = 0;
-        plan->numDisCols = best_path->dqas_num;
-        plan->distColIdx = palloc0(sizeof(Index) * plan->numDisCols);
-        while ((i = bms_first_member(best_path->dqas_ref_bm)) >= 0)
-        {
-            TargetEntry *te = get_sortgroupref_tle((Index)i, subplan->targetlist);
-            plan->distColIdx[j] = te->resno;
-            j++;
-        }
+	{
+		int i, j = 0;
+		plan->numDisCols = best_path->dqas_num;
+		plan->distColIdx = palloc0(sizeof(Index) * plan->numDisCols);
+		while ((i = bms_first_member(best_path->dqas_ref_bm)) >= 0)
+		{
+			TargetEntry *te = get_sortgroupref_tle((Index)i, subplan->targetlist);
+			plan->distColIdx[j] = te->resno;
+			j++;
+		}
+	}
+	else if (plan->aggstrategy == AGG_SHADOWELIMINATE)
+	{
+		plan->mapSz = best_path->mapSz;
+		plan->shadowMap = palloc0(plan->mapSz * sizeof(int));
+		memcpy(plan->shadowMap, best_path->shadowMap, plan->mapSz * sizeof(int));
+	}
 
-    }
-	else if (plan->aggstrategy == AGG_SHADOWELIMIT)
-    {
-        plan->mapSz = best_path->mapSz;
-        plan->shadowMap = palloc0(plan->mapSz * sizeof(int));
-        memcpy(plan->shadowMap, best_path->shadowMap, plan->mapSz * sizeof(int));
-    }
-
-
-    return plan;
+	return plan;
 }
 
 /*

@@ -1171,8 +1171,8 @@ _copyAgg(const Agg *from)
 	COPY_SCALAR_FIELD(numDisCols);
 	COPY_POINTER_FIELD(distColIdx, from->numDisCols);
 
-    COPY_SCALAR_FIELD(mapSz);
-    COPY_POINTER_FIELD(shadowMap, from->mapSz);
+	COPY_SCALAR_FIELD(mapSz);
+	COPY_POINTER_FIELD(shadowMap, from->mapSz);
 	return newnode;
 }
 
@@ -5443,11 +5443,11 @@ _copyForeignKeyCacheInfo(const ForeignKeyCacheInfo *from)
 static ShadowExpr*
 _copyShadowExpr(const ShadowExpr *from)
 {
-    ShadowExpr * newnode = makeNode(ShadowExpr);
+	ShadowExpr * newnode = makeNode(ShadowExpr);
 
-    COPY_NODE_FIELD(expr);
+	COPY_NODE_FIELD(expr);
 
-    return newnode;
+	return newnode;
 }
 
 /*
@@ -6459,9 +6459,9 @@ copyObject(const void *from)
 			retval = _copyForeignKeyCacheInfo(from);
 			break;
 
-	    case T_ShadowExpr:
-	        retval = _copyShadowExpr(from);
-            break;
+		case T_ShadowExpr:
+			retval = _copyShadowExpr(from);
+			break;
 
 		default:
 			elog(ERROR, "unrecognized node type: %d", (int) nodeTag(from));

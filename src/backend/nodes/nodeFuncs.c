@@ -281,9 +281,9 @@ exprType(const Node *expr)
 		case T_PartListNullTestExpr:
 			type = BOOLOID;
 			break;
-	    case T_ShadowExpr:
-            type = exprType((Node *) ((ShadowExpr *) expr)->expr);
-            break;
+		case T_ShadowExpr:
+			type = exprType((Node *) ((ShadowExpr *) expr)->expr);
+			break;
 
 		default:
 			elog(ERROR, "unrecognized node type: %d", (int) nodeTag(expr));
@@ -971,10 +971,10 @@ exprCollation(const Node *expr)
 			 */
 			coll = InvalidOid;
 			break;
-        case T_ShadowExpr:
-            coll = exprCollation((Node *) ((ShadowExpr *)expr)->expr);
-            break;
-        default:
+		case T_ShadowExpr:
+			coll = exprCollation((Node *) ((ShadowExpr *)expr)->expr);
+			break;
+		default:
 			elog(ERROR, "unrecognized node type: %d", (int) nodeTag(expr));
 			coll = InvalidOid;	/* keep compiler quiet */
 			break;
@@ -1941,9 +1941,9 @@ expression_tree_walker(Node *node,
 		case T_PartListNullTestExpr:
 			/* primitive node types with no expression subnodes */
 			break;
-        case T_ShadowExpr:
-            return walker(((ShadowExpr *) node)->expr, context);
-        case T_WithCheckOption:
+		case T_ShadowExpr:
+			return walker(((ShadowExpr *) node)->expr, context);
+		case T_WithCheckOption:
 			return walker(((WithCheckOption *) node)->qual, context);
 		case T_Aggref:
 			{
@@ -3225,17 +3225,17 @@ expression_tree_mutator(Node *node,
 				return (Node *) newnode;
 			}
 			break;
-        case T_ShadowExpr:
-            {
-                ShadowExpr *sExpr = (ShadowExpr *)node;
-                ShadowExpr *newSExpr;
+		case T_ShadowExpr:
+			{
+				ShadowExpr *sExpr = (ShadowExpr *)node;
+				ShadowExpr *newSExpr;
 
-                FLATCOPY(newSExpr, sExpr, ShadowExpr);
-                MUTATE(newSExpr->expr, sExpr->expr, Expr *);
-                return (Node *)newSExpr;
-            }
-            break;
-        default:
+				FLATCOPY(newSExpr, sExpr, ShadowExpr);
+				MUTATE(newSExpr->expr, sExpr->expr, Expr *);
+				return (Node *)newSExpr;
+			}
+			break;
+		default:
 			elog(ERROR, "unrecognized node type: %d",
 				 (int) nodeTag(node));
 			break;

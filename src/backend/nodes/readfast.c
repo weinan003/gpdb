@@ -2525,14 +2525,14 @@ readNodeBinary(void)
 			case T_GroupId:
 				return_value = _readGroupId();
 				break;
-            case T_ShadowExpr:
-                return_value = _readShadowExpr();
-                break;
-            case T_WindowFunc:
-                return_value = _readWindowFunc();
-                break;
-            case T_ArrayRef:
-                return_value = _readArrayRef();
+			case T_ShadowExpr:
+				return_value = _readShadowExpr();
+				break;
+			case T_WindowFunc:
+				return_value = _readWindowFunc();
+				break;
+			case T_ArrayRef:
+				return_value = _readArrayRef();
 				break;
 			case T_FuncExpr:
 				return_value = _readFuncExpr();

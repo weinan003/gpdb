@@ -215,7 +215,7 @@ select count(distinct d), count(distinct dt) from dqa_t1 group by d;
 explain (costs off) select count(distinct d), count(distinct dt) from dqa_t1 group by d;
                                   QUERY PLAN                                  
 ------------------------------------------------------------------------------
- ShadowElimit
+ ShadowEliminate
    ->  Finalize HashAggregate
          Group Key: (<d>)
          ->  Gather Motion 3:1  (slice2; segments: 3)
@@ -768,7 +768,7 @@ explain (costs off) select sum(distinct d), count(distinct i), count(distinct c)
 ------------------------------------------------------------------------------------
  Sort
    Sort Key: i, c
-   ->  ShadowElimit
+   ->  ShadowEliminate
          ->  Finalize HashAggregate
                Group Key: (<i>), (<c>)
                ->  Gather Motion 3:1  (slice2; segments: 3)

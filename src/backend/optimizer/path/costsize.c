@@ -1998,9 +1998,9 @@ cost_agg(Path *path, PlannerInfo *root,
 	/* Use all-zero per-aggregate costs if NULL is passed */
 	if (aggcosts == NULL)
 	{
-        Assert(aggstrategy == AGG_HASHED
-               || aggstrategy == AGG_SHADOWELIMIT
-               || aggstrategy == AGG_TUP_SPLIT);
+		Assert(aggstrategy == AGG_HASHED
+			   || aggstrategy == AGG_SHADOWELIMINATE
+			   || aggstrategy == AGG_TUP_SPLIT);
 
 		MemSet(&dummy_aggcosts, 0, sizeof(AggClauseCosts));
 		aggcosts = &dummy_aggcosts;
@@ -2058,17 +2058,17 @@ cost_agg(Path *path, PlannerInfo *root,
 		}
 	}
 	else if (aggstrategy == AGG_TUP_SPLIT)
-    {
-        output_tuples = list_length(aggcosts->distinctAggrefs) * input_tuples;
-        startup_cost = input_total_cost;
-        total_cost = startup_cost + cpu_operator_cost * input_tuples;
-    }
-	else if (aggstrategy == AGG_SHADOWELIMIT)
-    {
-	    output_tuples = input_tuples;
-        startup_cost = input_total_cost;
-        total_cost = startup_cost + cpu_operator_cost * input_tuples;
-    }
+	{
+		output_tuples = list_length(aggcosts->distinctAggrefs) * input_tuples;
+		startup_cost = input_total_cost;
+		total_cost = startup_cost + cpu_operator_cost * input_tuples;
+	}
+	else if (aggstrategy == AGG_SHADOWELIMINATE)
+	{
+		output_tuples = input_tuples;
+		startup_cost = input_total_cost;
+		total_cost = startup_cost + cpu_operator_cost * input_tuples;
+	}
 	else
 	{
 		double spilled_bytes = 0.0;

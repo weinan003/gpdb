@@ -8446,15 +8446,15 @@ get_rule_expr(Node *node, deparse_context *context,
 			}
 			break;
 
-        case T_ShadowExpr:
-        {
-            appendStringInfo(buf, "<");
-            get_rule_expr((Node *)((ShadowExpr *)node)->expr, context, showimplicit);
-            appendStringInfo(buf, ">");
-        }
-            break;
+		case T_ShadowExpr:
+			{
+				appendStringInfo(buf, "<");
+				get_rule_expr((Node *)((ShadowExpr *)node)->expr, context, showimplicit);
+				appendStringInfo(buf, ">");
+			}
+			break;
 
-        default:
+		default:
 			elog(ERROR, "unrecognized node type: %d", (int) nodeTag(node));
 			break;
 	}

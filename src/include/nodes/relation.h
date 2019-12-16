@@ -1705,11 +1705,11 @@ typedef struct AggPath
 	List	   *qual;			/* quals (HAVING quals), if any */
 	bool		streaming;
 
-    int         dqas_num;       /* AGG_SPLIT store dqa exprs number */
-    Bitmapset   *dqas_ref_bm;   /* AGG_SPLIT store dqa exprs Index in input */
+	int         dqas_num;       /* AGG_SPLIT store dqa exprs number */
+	Bitmapset   *dqas_ref_bm;   /* AGG_SPLIT store dqa exprs Index in input */
 
-    int         mapSz;          /* shadowMap size */
-    int         *shadowMap;     /* AGG_SHADOWELIMIT ShadowExpr to Expr map */
+	int         mapSz;          /* shadowMap size */
+	int         *shadowMap;     /* AGG_SHADOWELIMINATE ShadowExpr to Expr map */
 } AggPath;
 
 /*
