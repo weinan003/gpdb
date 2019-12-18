@@ -391,6 +391,19 @@ _outMergeJoin(StringInfo str, MergeJoin *node)
 }
 
 static void
+_outTupleSplit(StringInfo str, TupleSplit *node)
+{
+    WRITE_NODE_TYPE("TupleSplit");
+
+    _outPlanInfo(str, (Plan *) node);
+
+    WRITE_INT_FIELD(numCols);
+    WRITE_INT_ARRAY(grpColIdx, node->numCols, AttrNumber);
+    WRITE_INT_FIELD(numDisCols);
+    WRITE_INT_ARRAY(distColIdx, node->numDisCols, AttrNumber);
+}
+
+static void
 _outAgg(StringInfo str, Agg *node)
 {
 	WRITE_NODE_TYPE("AGG");
@@ -408,9 +421,6 @@ _outAgg(StringInfo str, Agg *node)
 	WRITE_NODE_FIELD(groupingSets);
 	WRITE_NODE_FIELD(chain);
 	WRITE_BOOL_FIELD(streaming);
-
-	WRITE_INT_FIELD(numDisCols);
-	WRITE_INT_ARRAY(distColIdx, node->numDisCols, AttrNumber);
 
 	WRITE_INT_FIELD(mapSz);
 	WRITE_INT_ARRAY(shadowMap, node->mapSz, int);
@@ -1444,6 +1454,9 @@ _outNode(StringInfo str, void *obj)
 			case T_Agg:
 				_outAgg(str, obj);
 				break;
+		    case T_TupleSplit:
+		        _outTupleSplit(str, obj);
+		        break;
 			case T_WindowAgg:
 				_outWindowAgg(str, obj);
 				break;

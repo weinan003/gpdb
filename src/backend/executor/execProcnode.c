@@ -113,6 +113,7 @@
 #include "executor/nodeSubplan.h"
 #include "executor/nodeSubqueryscan.h"
 #include "executor/nodeTidscan.h"
+#include "executor/nodeTupleSplit.h"
 #include "executor/nodeUnique.h"
 #include "executor/nodeValuesscan.h"
 #include "executor/nodeWindowAgg.h"
@@ -683,6 +684,17 @@ ExecInitNode(Plan *node, EState *estate, int eflags)
 			END_MEMORY_ACCOUNT();
 			break;
 
+	    case T_TupleSplit:
+            curMemoryAccountId = CREATE_EXECUTOR_MEMORY_ACCOUNT(isAlienPlanNode, node, Agg);
+
+            START_MEMORY_ACCOUNT(curMemoryAccountId);
+            {
+            result = (PlanState *) ExecInitTupleSplit((TupleSplit *) node,
+                                                      estate, eflags);
+            }
+            END_MEMORY_ACCOUNT();
+            break;
+
 		case T_WindowAgg:
 			curMemoryAccountId = CREATE_EXECUTOR_MEMORY_ACCOUNT(isAlienPlanNode, node, WindowAgg);
 
@@ -1116,6 +1128,10 @@ ExecProcNode(PlanState *node)
 			result = ExecAgg((AggState *) node);
 			break;
 
+        case T_TupleSplitState:
+            result = ExecTupleSplit((TupleSplitState *) node);
+            break;
+
 		case T_WindowAggState:
 			result = ExecWindowAgg((WindowAggState *) node);
 			break;
@@ -1475,6 +1491,10 @@ ExecEndNode(PlanState *node)
 		case T_AggState:
 			ExecEndAgg((AggState *) node);
 			break;
+
+	    case T_TupleSplitState:
+	        ExecEndTupleSplit((TupleSplitState *) node);
+            break;
 
 		case T_WindowAggState:
 			ExecEndWindowAgg((WindowAggState *) node);

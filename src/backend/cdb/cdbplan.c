@@ -624,11 +624,23 @@ plan_tree_mutator(Node *node,
 				FLATCOPY(newagg, agg, Agg);
 				PLANMUTATE(newagg, agg);
 				COPYARRAY(newagg, agg, numCols, grpColIdx);
-				COPYARRAY(newagg, agg, numDisCols, distColIdx);
 				COPYARRAY(newagg, agg, mapSz, shadowMap);
 				return (Node *) newagg;
 			}
 			break;
+
+        case T_TupleSplit:
+        {
+            TupleSplit  *tup_split = (TupleSplit *) node;
+            TupleSplit  *new_tup_split;
+
+            FLATCOPY(new_tup_split, tup_split, TupleSplit);
+            PLANMUTATE(new_tup_split, tup_split);
+            COPYARRAY(new_tup_split, tup_split, numCols, grpColIdx);
+            COPYARRAY(new_tup_split, tup_split, numDisCols, distColIdx);
+            return (Node *) new_tup_split;
+        }
+            break;
 
 		case T_TableFunctionScan:
 			{

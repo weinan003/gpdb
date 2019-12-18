@@ -113,6 +113,7 @@ static Sort *create_sort_plan(PlannerInfo *root, SortPath *best_path, int flags)
 static Unique *create_upper_unique_plan(PlannerInfo *root, UpperUniquePath *best_path,
 						 int flags);
 static Agg *create_agg_plan(PlannerInfo *root, AggPath *best_path);
+static TupleSplit *create_tup_split_plan(PlannerInfo *root, TupleSplitPath *best_path);
 static Plan *create_groupingsets_plan(PlannerInfo *root, GroupingSetsPath *best_path);
 static Result *create_minmaxagg_plan(PlannerInfo *root, MinMaxAggPath *best_path);
 static WindowAgg *create_windowagg_plan(PlannerInfo *root, WindowAggPath *best_path);
@@ -462,6 +463,10 @@ create_plan_recurse(PlannerInfo *root, Path *best_path, int flags)
 												(AggPath *) best_path);
 			}
 			break;
+	    case T_TupleSplit:
+            plan = (Plan *)create_tup_split_plan(root,
+                                                 (TupleSplitPath *) best_path);
+            break;
 		case T_WindowAgg:
 			plan = (Plan *) create_windowagg_plan(root,
 												(WindowAggPath *) best_path);
@@ -1739,19 +1744,7 @@ create_agg_plan(PlannerInfo *root, AggPath *best_path)
 
 	plan->plan.flow = copyObject(subplan->flow);
 
-	if (plan->aggstrategy == AGG_TUP_SPLIT)
-	{
-		int i, j = 0;
-		plan->numDisCols = best_path->dqas_num;
-		plan->distColIdx = palloc0(sizeof(Index) * plan->numDisCols);
-		while ((i = bms_first_member(best_path->dqas_ref_bm)) >= 0)
-		{
-			TargetEntry *te = get_sortgroupref_tle((Index)i, subplan->targetlist);
-			plan->distColIdx[j] = te->resno;
-			j++;
-		}
-	}
-	else if (plan->aggstrategy == AGG_SHADOWELIMINATE)
+	if (plan->aggstrategy == AGG_SHADOWELIMINATE)
 	{
 		plan->mapSz = best_path->mapSz;
 		plan->shadowMap = palloc0(plan->mapSz * sizeof(int));
@@ -1759,6 +1752,38 @@ create_agg_plan(PlannerInfo *root, AggPath *best_path)
 	}
 
 	return plan;
+}
+
+/*
+ * create_tup_split_plan
+ *
+ *	  Create an TupleSplit plan for 'best_path' and (recursively) plans
+ *	  for its subpaths.
+ */
+static TupleSplit *
+create_tup_split_plan(PlannerInfo *root, TupleSplitPath *best_path)
+{
+    TupleSplit *plan;
+    Plan	   *subplan;
+    List	   *tlist;
+
+    subplan = create_plan_recurse(root, best_path->subpath, CP_LABEL_TLIST);
+
+    tlist = build_path_tlist(root, &best_path->path);
+
+    plan = make_tup_split(tlist, best_path->dqas_num, best_path->dqas_ref_bm,
+                          list_length(best_path->groupClause),
+                          extract_grouping_cols(best_path->groupClause,
+                                                subplan->targetlist),
+                          subplan);
+
+    copy_generic_path_info(&plan->plan, (Path *) best_path);
+
+    plan->plan.flow = cdbpathtoplan_create_flow(root,
+                                                best_path->path.locus,
+                                                (Plan *) plan);
+
+    return plan;
 }
 
 /*
@@ -7399,6 +7424,41 @@ make_agg(List *tlist, List *qual,
 	plan->flow = pull_up_Flow(plan, lefttree);
 
 	return node;
+}
+
+TupleSplit *
+make_tup_split(List *tlist,
+               int numDQAs, Bitmapset *dqas_ref_bm,
+               int numGroupCols, AttrNumber *grpColIdx,
+               Plan *lefttree)
+{
+    TupleSplit *node = makeNode(TupleSplit);
+    Plan	   *plan = &node->plan;
+
+    node->numCols = numGroupCols;
+    node->grpColIdx = grpColIdx;
+    node->numDisCols = numDQAs;
+    node->distColIdx = palloc0(sizeof(Index) * numDQAs);
+
+    int i = 0;
+    int j = 0;
+    while ((i = bms_first_member(dqas_ref_bm)) >= 0)
+    {
+        TargetEntry *te = get_sortgroupref_tle((Index)i, lefttree->targetlist);
+        node->distColIdx[j] = te->resno;
+        j++;
+    }
+
+    plan->targetlist = tlist;
+    plan->lefttree = lefttree;
+    plan->righttree = NULL;
+
+    plan->extParam = bms_copy(lefttree->extParam);
+    plan->allParam = bms_copy(lefttree->allParam);
+
+    plan->flow = pull_up_Flow(plan, lefttree);
+
+    return node;
 }
 
 static WindowAgg *

@@ -1999,8 +1999,7 @@ cost_agg(Path *path, PlannerInfo *root,
 	if (aggcosts == NULL)
 	{
 		Assert(aggstrategy == AGG_HASHED
-			   || aggstrategy == AGG_SHADOWELIMINATE
-			   || aggstrategy == AGG_TUP_SPLIT);
+			   || aggstrategy == AGG_SHADOWELIMINATE);
 
 		MemSet(&dummy_aggcosts, 0, sizeof(AggClauseCosts));
 		aggcosts = &dummy_aggcosts;
@@ -2056,12 +2055,6 @@ cost_agg(Path *path, PlannerInfo *root,
 			startup_cost += disable_cost;
 			total_cost += disable_cost;
 		}
-	}
-	else if (aggstrategy == AGG_TUP_SPLIT)
-	{
-		output_tuples = list_length(aggcosts->distinctAggrefs) * input_tuples;
-		startup_cost = input_total_cost;
-		total_cost = startup_cost + cpu_operator_cost * input_tuples;
 	}
 	else if (aggstrategy == AGG_SHADOWELIMINATE)
 	{
@@ -2129,6 +2122,29 @@ cost_agg(Path *path, PlannerInfo *root,
 	path->rows = output_tuples;
 	path->startup_cost = startup_cost;
 	path->total_cost = total_cost;
+}
+
+/*
+ * cost_tup_split
+ *		Determines and returns the cost of performing an TupleSplit plan node,
+ *		including the cost of its input.
+ */
+void cost_tup_split(Path *path, PlannerInfo *root,
+                    int numDQAs,
+                    Cost input_startup_cost, Cost input_total_cost,
+                    double input_tuples)
+{
+    double		output_tuples;
+    Cost		startup_cost;
+    Cost		total_cost;
+
+    output_tuples = numDQAs * input_tuples;
+    startup_cost = input_total_cost;
+    total_cost = startup_cost + cpu_operator_cost * input_tuples;
+
+    path->rows = output_tuples;
+    path->startup_cost = startup_cost;
+    path->total_cost = total_cost;
 }
 
 /*

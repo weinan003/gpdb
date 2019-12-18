@@ -214,14 +214,13 @@ extern AggPath *create_agg_path(PlannerInfo *root,
 				double numGroups,
 				struct HashAggTableSizes *hash_info);
 
-extern AggPath *create_tup_split_path(PlannerInfo *root,
-									  RelOptInfo *rel,
-									  Path *subpath,
-									  PathTarget *target,
-									  List *groupClause,
-									  double numGroups,
-									  Bitmapset *bitmapset,
-									  int bmSz);
+extern TupleSplitPath *create_tup_split_path(PlannerInfo *root,
+                                             RelOptInfo *rel,
+                                             Path *subpath,
+                                             PathTarget *target,
+                                             List *groupClause,
+                                             Bitmapset *bitmapset,
+                                             int bmSz);
 
 extern AggPath *create_shadow_eliminate_path(PlannerInfo *root,
 											 RelOptInfo *rel,

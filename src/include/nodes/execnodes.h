@@ -2620,8 +2620,8 @@ typedef enum HashAggStatus
 
 typedef struct SplitAggInfo
 {
-	int             idx;
-	TupleTableSlot  *outerslot;
+    int             idx;
+    TupleTableSlot  *outerslot;
 } SplitAggInfo;
 
 typedef struct AggState
@@ -2689,12 +2689,17 @@ typedef struct AggState
 	bool		ps_TupFromTlist;
 
 	List        *shadow_idx; /* For Shadow Expr eliminate, store each shadow expr tlist index */
-
-	/* Split Tuple */
-	bool		*isnull_orig;
-	Bitmapset   *grpbySet;
-	SplitAggInfo	s_agg_info;
 } AggState;
+
+typedef struct TupleSplitState
+{
+    ScanState	    ss;				/* its first field is NodeTag */
+
+    bool		    *isnull_orig;
+    Bitmapset       *grpbySet;
+    int             idx;
+    TupleTableSlot  *outerslot;
+} TupleSplitState;
 
 /* ----------------
  *	WindowAggState information

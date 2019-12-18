@@ -242,6 +242,9 @@ pathnode_walk_kids(Path            *path,
 		case T_Agg:
 			v = pathnode_walk_node(((AggPath *)path)->subpath, walker, context);
 			break;
+	    case T_TupleSplit:
+            v = pathnode_walk_node(((TupleSplitPath *)path)->subpath, walker, context);
+            break;
 		case T_WindowAgg:
 			v = pathnode_walk_node(((WindowAggPath *)path)->subpath, walker, context);
 			break;
@@ -4105,32 +4108,43 @@ create_agg_path(PlannerInfo *root,
  * 'bitmapset' is the bitmap of DQA expr Index in PathTarget
  * 'bmSz' is the number of bitmapset size
  */
-AggPath *
+TupleSplitPath *
 create_tup_split_path(PlannerInfo *root,
 					  RelOptInfo *rel,
 					  Path *subpath,
 					  PathTarget *target,
 					  List *groupClause,
-					  double numGroups,
 					  Bitmapset *bitmapset,
 					  int bmSz)
 {
-	AggPath * path = create_agg_path(root, rel,
-									 subpath, target,
-									 AGG_TUP_SPLIT,
-									 AGGSPLIT_SIMPLE,
-									 false,
-									 groupClause,
-									 NIL,
-									 NULL,
-									 numGroups,
-									 NULL);
+    TupleSplitPath *pathnode = makeNode(TupleSplitPath);
 
-	path->dqas_ref_bm = bms_copy(bitmapset);
-	path->dqas_num = bmSz;
+    pathnode->path.pathtype = T_TupleSplit;
+    pathnode->path.parent = rel;
+    pathnode->path.pathtarget = target;
 
-	return path;
+    /* For now, assume we are above any joins, so no parameterization */
+    pathnode->path.param_info = NULL;
+    pathnode->path.parallel_aware = false;
+    pathnode->path.parallel_safe = rel->consider_parallel &&
+            subpath->parallel_safe;
+    pathnode->path.parallel_workers = subpath->parallel_workers;
+    pathnode->path.pathkeys = NIL;
 
+    pathnode->subpath = subpath;
+    pathnode->groupClause = groupClause;
+
+	pathnode->dqas_ref_bm = bms_copy(bitmapset);
+	pathnode->dqas_num = bmSz;
+
+    cost_tup_split(&pathnode->path, root, bmSz,
+                   subpath->startup_cost, subpath->total_cost,
+                   subpath->rows);
+
+    CdbPathLocus_MakeStrewn(&pathnode->path.locus,
+                            subpath->locus.numsegments);
+
+	return pathnode;
 }
 
 /*

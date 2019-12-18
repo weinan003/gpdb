@@ -102,6 +102,8 @@ static void show_merge_append_keys(MergeAppendState *mstate, List *ancestors,
 					   ExplainState *es);
 static void show_agg_keys(AggState *astate, List *ancestors,
 			  ExplainState *es);
+static void show_tuple_split_keys(TupleSplitState *tstate, List *ancestors,
+              ExplainState *es);
 static void show_grouping_sets(PlanState *planstate, Agg *agg,
 							   List *ancestors, ExplainState *es);
 static void show_grouping_set_keys(PlanState *planstate,
@@ -1340,6 +1342,9 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_Sort:
 			pname = sname = "Sort";
 			break;
+	    case T_TupleSplit:
+            pname = "TupleSplit";
+	        break;
 		case T_Agg:
 			{
 				Agg		   *agg = (Agg *) plan;
@@ -1358,10 +1363,6 @@ ExplainNode(PlanState *planstate, List *ancestors,
 					case AGG_HASHED:
 						pname = "HashAggregate";
 						strategy = "Hashed";
-						break;
-					case AGG_TUP_SPLIT:
-						pname = "TupleSplit";
-						strategy = "Plain";
 						break;
 					case AGG_SHADOWELIMINATE:
 						pname = "ShadowEliminate";
@@ -2104,6 +2105,9 @@ ExplainNode(PlanState *planstate, List *ancestors,
 										   planstate, es);
 			break;
 		}
+        case T_TupleSplit:
+            show_tuple_split_keys((TupleSplitState *)planstate, ancestors, es);
+            break;
 		case T_Agg:
 			show_agg_keys((AggState *) planstate, ancestors, es);
 			show_upper_qual(plan->qual, "Filter", planstate, ancestors, es);
@@ -2564,19 +2568,40 @@ show_merge_append_keys(MergeAppendState *mstate, List *ancestors,
 }
 
 /*
+ * Show the Split key for an SplitTuple
+ */
+static void
+show_tuple_split_keys(TupleSplitState *tstate, List *ancestors,
+                                  ExplainState *es)
+{
+    TupleSplit *plan = (TupleSplit *)tstate->ss.ps.plan;
+
+    ancestors = lcons(tstate, ancestors);
+
+    if (plan->numDisCols > 0)
+        show_sort_group_keys(outerPlanState(tstate), "Split by Col",
+                             plan->numDisCols, plan->distColIdx,
+                             NULL, NULL, NULL,
+                             ancestors, es);
+
+    if (plan->numCols > 0)
+        show_sort_group_keys(outerPlanState(tstate), "Group Key",
+                             plan->numCols, plan->grpColIdx,
+                             NULL, NULL, NULL,
+                             ancestors, es);
+
+    ancestors = list_delete_first(ancestors);
+}
+
+/*
  * Show the grouping keys for an Agg node.
  */
 static void
 show_agg_keys(AggState *astate, List *ancestors,
-			  ExplainState *es)
+              ExplainState *es)
 {
 	Agg		   *plan = (Agg *) astate->ss.ps.plan;
 
-	if (plan->numDisCols)
-		show_sort_group_keys(outerPlanState(astate), "Split by Col",
-							 plan->numDisCols, plan->distColIdx,
-							 NULL, NULL, NULL,
-							 ancestors, es);
 
 	if (plan->numCols > 0 || plan->groupingSets)
 	{

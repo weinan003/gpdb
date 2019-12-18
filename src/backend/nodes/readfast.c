@@ -2438,6 +2438,9 @@ readNodeBinary(void)
 			case T_Agg:
 				return_value = _readAgg();
 				break;
+            case T_TupleSplit:
+                return_value = _readTupleSplit();
+                break;
 			case T_WindowAgg:
 				return_value = _readWindowAgg();
 				break;

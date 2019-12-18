@@ -94,6 +94,7 @@ typedef enum NodeTag
 	T_Material,
 	T_Sort,
 	T_Agg,
+	T_TupleSplit,
 	T_WindowAgg,
 	T_Unique,
 	T_Gather,
@@ -161,6 +162,7 @@ typedef enum NodeTag
 	T_MaterialState,
 	T_SortState,
 	T_AggState,
+	T_TupleSplitState,
 	T_WindowAggState,
 	T_UniqueState,
 	T_GatherState,
@@ -335,6 +337,7 @@ typedef enum NodeTag
 	T_GroupingSetsPath,
 	T_MinMaxAggPath,
 	T_WindowAggPath,
+    T_TupleSplitPath,
 	T_SetOpPath,
 	T_RecursiveUnionPath,
 	T_LockRowsPath,
@@ -907,7 +910,6 @@ typedef enum AggStrategy
 	AGG_PLAIN,					/* simple agg across all input rows */
 	AGG_SORTED,					/* grouped agg, input must be sorted */
 	AGG_HASHED,					/* grouped agg, use internal hashtable */
-	AGG_TUP_SPLIT,              /* split agg, use internal multidqa tuple split */
 	AGG_SHADOWELIMINATE            /* shadow eliminate agg, use multidqa result eliminate shadow expr */
 } AggStrategy;
 

@@ -3083,15 +3083,25 @@ _readAgg(void)
 	READ_NODE_FIELD(chain);
 	READ_BOOL_FIELD(streaming);
 
-	READ_INT_FIELD(numDisCols);
-	READ_ATTRNUMBER_ARRAY(distColIdx, local_node->numDisCols);
-
 	READ_INT_FIELD(mapSz);
 	READ_INT_ARRAY(shadowMap, local_node->mapSz);
 
 	READ_DONE();
 }
 
+static TupleSplit *
+_readTupleSplit(void)
+{
+    READ_LOCALS(TupleSplit);
+
+    ReadCommonPlan(&local_node->plan);
+
+    READ_INT_FIELD(numCols);
+    READ_ATTRNUMBER_ARRAY(grpColIdx, local_node->numCols);
+    READ_INT_FIELD(numDisCols);
+    READ_ATTRNUMBER_ARRAY(distColIdx, local_node->numDisCols);
+    READ_DONE();
+}
 /*
  * _readWindowAgg
  */
@@ -4243,6 +4253,8 @@ parseNodeString(void)
 		return_value = _readSort();
 	else if (MATCH("AGG", 3))
 		return_value = _readAgg();
+	else if (MATCH("TupleSplit",10))
+        return_value = _readTupleSplit();
 	else if (MATCH("WINDOWAGG", 9))
 		return_value = _readWindowAgg();
 	else if (MATCH("UNIQUE", 6))

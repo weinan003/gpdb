@@ -1168,14 +1168,30 @@ _copyAgg(const Agg *from)
 	COPY_NODE_FIELD(chain);
 	COPY_SCALAR_FIELD(streaming);
 
-	COPY_SCALAR_FIELD(numDisCols);
-	COPY_POINTER_FIELD(distColIdx, from->numDisCols);
-
 	COPY_SCALAR_FIELD(mapSz);
 	COPY_POINTER_FIELD(shadowMap, from->mapSz);
 	return newnode;
 }
 
+/*
+ * _copyTupleSplit
+ */
+static TupleSplit *
+_copyTupleSplit(const TupleSplit *from)
+{
+    TupleSplit  *newnode = makeNode(TupleSplit);
+
+    CopyPlanFields((const Plan *) from, (Plan *) newnode);
+    COPY_SCALAR_FIELD(numCols);
+    if (from->numCols > 0)
+    {
+        COPY_POINTER_FIELD(grpColIdx, from->numCols * sizeof(AttrNumber));
+    }
+
+    COPY_SCALAR_FIELD(numDisCols);
+    COPY_POINTER_FIELD(distColIdx, from->numDisCols);
+    return newnode;
+}
 /*
  * _copyWindowAgg
  */
@@ -5598,6 +5614,9 @@ copyObject(const void *from)
 		case T_Agg:
 			retval = _copyAgg(from);
 			break;
+        case T_TupleSplit:
+            retval = _copyTupleSplit(from);
+            break;
 		case T_WindowAgg:
 			retval = _copyWindowAgg(from);
 			break;

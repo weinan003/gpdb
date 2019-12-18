@@ -1713,6 +1713,23 @@ typedef struct AggPath
 } AggPath;
 
 /*
+ * TupleSplitPath represents tuple split by DQAs expr
+ *
+ * In gpdb, we need to split one input tuple to n output tuples for MultiDQA
+ * MPP execution. Each output tuple only contains one DQA expr and all GROUP BY
+ * exprs.
+ */
+typedef struct TupleSplitPath
+{
+    Path		path;
+    Path	   *subpath;		/* path representing input source */
+    List	   *groupClause;	/* a list of SortGroupClause's */
+
+    int         dqas_num;       /* AGG_SPLIT store dqa exprs number */
+    Bitmapset   *dqas_ref_bm;   /* AGG_SPLIT store dqa exprs Index in input */
+} TupleSplitPath;
+
+/*
  * GroupingSetsPath represents a GROUPING SETS aggregation
  *
  * Currently we only support this in sorted not hashed form, so the input

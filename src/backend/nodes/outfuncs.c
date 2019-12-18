@@ -979,16 +979,33 @@ _outAgg(StringInfo str, const Agg *node)
 	WRITE_NODE_FIELD(chain);
 	WRITE_BOOL_FIELD(streaming);
 
-	WRITE_INT_FIELD(numDisCols);
-	appendStringInfoString(str, " :distColIdx");
-	for (i = 0; i < node->numDisCols; i++)
-		appendStringInfo(str, " %d", node->distColIdx[i]);
-
 	WRITE_INT_FIELD(mapSz);
 	appendStringInfoString(str, " :shadowMap");
 	for (i = 0; i < node->mapSz; i++)
 		appendStringInfo(str, " %d", node->shadowMap[i]);
 
+}
+#endif /* COMPILING_BINARY_FUNCS */
+
+#ifndef COMPILING_BINARY_FUNCS
+static void
+_outTupleSplit(StringInfo str, TupleSplit *node)
+{
+    int         i;
+
+    WRITE_NODE_TYPE("TupleSplit");
+
+    _outPlanInfo(str, (const Plan *) node);
+
+    WRITE_INT_FIELD(numCols);
+    appendStringInfoString(str, " :grpColIdx");
+    for (i = 0; i < node->numCols; i++)
+        appendStringInfo(str, " %d", node->grpColIdx[i]);
+
+    WRITE_INT_FIELD(numDisCols);
+    appendStringInfoString(str, " :distColIdx");
+    for (i = 0; i < node->numDisCols; i++)
+        appendStringInfo(str, " %d", node->distColIdx[i]);
 }
 #endif /* COMPILING_BINARY_FUNCS */
 
@@ -5369,6 +5386,9 @@ outNode(StringInfo str, const void *obj)
 			case T_Agg:
 				_outAgg(str, obj);
 				break;
+            case T_TupleSplit:
+                _outTupleSplit(str, obj);
+                break;
 			case T_WindowAgg:
 				_outWindowAgg(str, obj);
 				break;

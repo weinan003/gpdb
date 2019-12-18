@@ -31,6 +31,7 @@
 #include "parser/parse_clause.h"
 #include "parser/parse_oper.h"
 #include "utils/lsyscache.h"
+#include "optimizer/clauses.h"
 
 typedef enum
 {
@@ -758,9 +759,13 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 										 path,
 										 info->input_target,
 										 root->parse->groupClause,
-										 cxt->dNumGroups * getgpsegmentCount(),
 										 info->dqas_ref_bm,
 										 info->dqas_num);
+
+	AggClauseCosts DedupCost;
+    get_agg_clause_costs(root, (Node *) info->input_target->exprs,
+                         AGGSPLIT_SIMPLE,
+                         &DedupCost);
 
 	if (gp_enable_dqa_pruning)
 		path = (Path *) create_agg_path(root,
@@ -772,11 +777,10 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 										true, /* streaming */
 										info->dqa_group_clause,
 										NIL,
-										cxt->agg_partial_costs, /* FIXME */
+										&DedupCost,
 										cxt->dNumGroups * getgpsegmentCount(),
 										&hash_info);
 
-	CdbPathLocus_MakeStrewn(&path->locus, numsegments);
 	distinct_locus = cdb_choose_grouping_locus(root, path,
 											   info->input_target,
 											   info->dqa_group_clause, NIL, NIL,
@@ -802,7 +806,7 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 										false, /* streaming */
 										info->dqa_group_clause,
 										NIL,
-										cxt->agg_partial_costs, /* FIXME */
+										&DedupCost,
 										cxt->dNumGroups * getgpsegmentCount(),
 										&hash_info);
 

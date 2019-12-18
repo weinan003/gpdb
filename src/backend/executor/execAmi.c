@@ -49,6 +49,7 @@
 #include "executor/nodeSubplan.h"
 #include "executor/nodeSubqueryscan.h"
 #include "executor/nodeTidscan.h"
+#include "executor/nodeTupleSplit.h"
 #include "executor/nodeUnique.h"
 #include "executor/nodeValuesscan.h"
 #include "executor/nodeWindowAgg.h"
@@ -282,6 +283,10 @@ ExecReScan(PlanState *node)
 		case T_AggState:
 			ExecReScanAgg((AggState *) node);
 			break;
+
+	    case T_TupleSplit:
+	        ExecReScanTupleSplit((TupleSplitState *) node);
+	        break;
 
 		case T_WindowAggState:
 			ExecReScanWindowAgg((WindowAggState *) node);
@@ -761,6 +766,10 @@ ExecSquelchNode(PlanState *node)
 		case T_AggState:
 			ExecSquelchAgg((AggState*) node);
 			break;
+
+        case T_TupleSplitState:
+            ExecSquelchTupleSplit((TupleSplitState*) node);
+            break;
 
 		case T_WindowAggState:
 			ExecSquelchWindowAgg((WindowAggState *) node);

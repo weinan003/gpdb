@@ -1758,9 +1758,6 @@ ExecAgg(AggState *node)
 					agg_fill_hash_table(node);
 				result = agg_retrieve_hash_table(node);
 				break;
-			case AGG_TUP_SPLIT:
-				result = split_tup_agg_retrieve_direct(node);
-				break;
 			case AGG_SHADOWELIMINATE:
 				result = shadow_eliminate_agg_retrieve_direct(node);
 				break;
@@ -1778,22 +1775,23 @@ ExecAgg(AggState *node)
 static TupleTableSlot *
 shadow_eliminate_agg_retrieve_direct(AggState *node)
 {
-	ExprContext *econtext;
-	TupleTableSlot *result;
-	SplitAggInfo *s_agg_info_p = &node->s_agg_info;
-	s_agg_info_p->outerslot = fetch_input_tuple(node);
+    TupleTableSlot  *result;
+	TupleTableSlot  *input_tuple;
+    ExprContext     *econtext;
+
+	input_tuple = fetch_input_tuple(node);
 	econtext = node->ss.ps.ps_ExprContext;
 
-	if (TupIsNull(s_agg_info_p->outerslot))
+	if (TupIsNull(input_tuple))
 	{
 		node->agg_done = TRUE;
 		return NULL;
 	}
 
-	slot_getallattrs(s_agg_info_p->outerslot);
+	slot_getallattrs(input_tuple);
 
-	Datum *values = slot_get_values(s_agg_info_p->outerslot);
-	bool  *isnulls = slot_get_isnull(s_agg_info_p->outerslot);
+	Datum *values = slot_get_values(input_tuple);
+	bool  *isnulls = slot_get_isnull(input_tuple);
 	ListCell *lc;
 	int idx, targetIdx;
 	foreach(lc, node->shadow_idx)
@@ -1805,64 +1803,10 @@ shadow_eliminate_agg_retrieve_direct(AggState *node)
 		isnulls[targetIdx] = false;
 	}
 
-	econtext->ecxt_outertuple = s_agg_info_p->outerslot;
+	econtext->ecxt_outertuple = input_tuple;
 	ResetExprContext(econtext);
 
 	result = project_aggregates(node);
-	return result;
-}
-
-/*
- * split_tup_agg_retrieve_direct
- * Split tuple according to DQA expr
- */
-static TupleTableSlot *
-split_tup_agg_retrieve_direct(AggState *node)
-{
-	ExprContext *econtext;
-	SplitAggInfo *s_agg_info_p = &node->s_agg_info;
-	TupleTableSlot *result;
-	econtext = node->ss.ps.ps_ExprContext;
-	Agg *plan = (Agg *)node->ss.ps.plan;
-
-	if (s_agg_info_p->idx == 0)
-	{
-		s_agg_info_p->outerslot = fetch_input_tuple(node);
-
-		if (TupIsNull(s_agg_info_p->outerslot))
-		{
-			node->agg_done = TRUE;
-			return NULL;
-		}
-
-		/* translate to virtual tuple */
-		slot_getallattrs(s_agg_info_p->outerslot);
-
-		/* store original tupleslot isnull array */
-		memcpy(node->isnull_orig, s_agg_info_p->outerslot->PRIVATE_tts_isnull,
-			   s_agg_info_p->outerslot->PRIVATE_tts_nvalid * sizeof(bool));
-	}
-
-	/* reset isnull */
-	bool *isnull = slot_get_isnull(s_agg_info_p->outerslot);
-	memcpy(isnull, node->isnull_orig, s_agg_info_p->outerslot->PRIVATE_tts_nvalid);
-
-	/* populate isnull if the column belone to other distinct and is not a group by */
-	for (Index idx = 0; idx < plan->numDisCols; idx++)
-	{
-		if (!(plan->distColIdx[idx] == plan->distColIdx[s_agg_info_p->idx]
-			  || bms_is_member(plan->distColIdx[s_agg_info_p->idx],
-							   node->grpbySet)))
-			isnull[plan->distColIdx[idx] - 1] = true;
-	}
-
-	s_agg_info_p->idx = (s_agg_info_p->idx + 1) % plan->numDisCols;
-
-	econtext->ecxt_outertuple = s_agg_info_p->outerslot;
-	ResetExprContext(econtext);
-
-	result = project_aggregates(node);
-
 	return result;
 }
 
@@ -3006,15 +2950,7 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 	aggstate->mem_manager.manager = aggstate;
 	aggstate->mem_manager.realloc_ratio = 1;
 
-	if (node->aggstrategy == AGG_TUP_SPLIT)
-	{
-		for (int keyno = 0; keyno < node->numCols; keyno++)
-		{
-			aggstate->grpbySet = bms_add_member(aggstate->grpbySet, node->grpColIdx[keyno]);
-		}
-		aggstate->isnull_orig = (bool *) palloc0(sizeof(bool) * list_length(outerPlan(node)->targetlist));
-	}
-	else if (node->aggstrategy == AGG_SHADOWELIMINATE)
+	if (node->aggstrategy == AGG_SHADOWELIMINATE)
 	{
 		int sz = node->mapSz;
 
@@ -3529,12 +3465,7 @@ ExecEndAgg(AggState *node)
 	for (setno = 0; setno < numGroupingSets; setno++)
 		ReScanExprContext(node->aggcontexts[setno]);
 
-	if (((Agg *)node->ss.ps.plan)->aggstrategy == AGG_TUP_SPLIT)
-	{
-		bms_free(node->grpbySet);
-		pfree(node->isnull_orig);
-	}
-	else if (((Agg *)node->ss.ps.plan)->aggstrategy == AGG_SHADOWELIMINATE)
+	if (((Agg *)node->ss.ps.plan)->aggstrategy == AGG_SHADOWELIMINATE)
 	{
 		list_free(node->shadow_idx);
 	}
