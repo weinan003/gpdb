@@ -1744,12 +1744,19 @@ create_agg_plan(PlannerInfo *root, AggPath *best_path)
 
 	plan->plan.flow = copyObject(subplan->flow);
 
-	if (plan->aggstrategy == AGG_SHADOWELIMINATE)
-	{
-		plan->mapSz = best_path->mapSz;
-		plan->shadowMap = palloc0(plan->mapSz * sizeof(int));
-		memcpy(plan->shadowMap, best_path->shadowMap, plan->mapSz * sizeof(int));
-	}
+    List *tl = plan->plan.lefttree->targetlist;
+    ListCell *lc;
+    Index id = 0;
+    foreach (lc, tl)
+    {
+        TargetEntry *te = (TargetEntry *)lfirst(lc);
+        if (IsA(te->expr,AggExprId))
+        {
+            plan->agg_expr_id = id + 1;
+            break;
+        }
+        id ++;
+    }
 
 	return plan;
 }
@@ -7438,7 +7445,7 @@ make_tup_split(List *tlist,
     node->numCols = numGroupCols;
     node->grpColIdx = grpColIdx;
     node->numDisCols = numDQAs;
-    node->distColIdx = palloc0(sizeof(Index) * numDQAs);
+    node->distColIdx = palloc0(sizeof(AttrNumber) * numDQAs);
 
     int i = 0;
     int j = 0;

@@ -2688,7 +2688,8 @@ typedef struct AggState
 	 */
 	bool		ps_TupFromTlist;
 
-	List        *shadow_idx; /* For Shadow Expr eliminate, store each shadow expr tlist index */
+    /* if input tuple contain AggExprId, save the tlist index */
+	Index       agg_expr_id;
 } AggState;
 
 typedef struct TupleSplitState
@@ -2697,9 +2698,19 @@ typedef struct TupleSplitState
 
     bool		    *isnull_orig;
     Bitmapset       *grpbySet;
+
     int             idx;
     TupleTableSlot  *outerslot;
+    Index           currentExprId;
+    AttrNumber      *dqa_expr_subentry_map;
 } TupleSplitState;
+
+typedef struct AggExprIdState
+{
+    ExprState	xprstate;
+
+    PlanState   *parent;
+}AggExprIdState;
 
 /* ----------------
  *	WindowAggState information

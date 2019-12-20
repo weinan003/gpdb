@@ -979,17 +979,13 @@ _outAgg(StringInfo str, const Agg *node)
 	WRITE_NODE_FIELD(chain);
 	WRITE_BOOL_FIELD(streaming);
 
-	WRITE_INT_FIELD(mapSz);
-	appendStringInfoString(str, " :shadowMap");
-	for (i = 0; i < node->mapSz; i++)
-		appendStringInfo(str, " %d", node->shadowMap[i]);
-
+	WRITE_UINT_FIELD(agg_expr_id);
 }
 #endif /* COMPILING_BINARY_FUNCS */
 
 #ifndef COMPILING_BINARY_FUNCS
 static void
-_outTupleSplit(StringInfo str, TupleSplit *node)
+_outTupleSplit(StringInfo str, const TupleSplit *node)
 {
     int         i;
 
@@ -1553,14 +1549,6 @@ _outGroupId(StringInfo str, const GroupId *node)
 
 	WRITE_INT_FIELD(agglevelsup);
 	WRITE_LOCATION_FIELD(location);
-}
-
-static void
-_outShadowExpr(StringInfo str, const ShadowExpr *node)
-{
-	WRITE_NODE_TYPE("SHADOWEXPR");
-
-	WRITE_NODE_FIELD(expr);
 }
 
 static void
@@ -5478,9 +5466,6 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_GroupId:
 				_outGroupId(str, obj);
-				break;
-			case T_ShadowExpr:
-				_outShadowExpr(str, obj);
 				break;
 			case T_WindowFunc:
 				_outWindowFunc(str, obj);

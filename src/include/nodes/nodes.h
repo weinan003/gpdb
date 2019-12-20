@@ -242,6 +242,7 @@ typedef enum NodeTag
 	T_RefreshClause,
 	T_Flow,
 	T_GroupId,
+	T_AggExprId,
 	T_DistributedBy,
 	T_DMLActionExpr,
 	T_PartSelectedExpr,
@@ -252,8 +253,6 @@ typedef enum NodeTag
 	T_PartListRuleExpr,
 	T_PartListNullTestExpr,
 	T_TableOidInfo,
-	T_ShadowExpr,
-
 	/*
 	 * TAGS FOR EXPRESSION STATE NODES (execnodes.h)
 	 *
@@ -296,6 +295,7 @@ typedef enum NodeTag
 	T_PartBoundOpenExprState,
 	T_PartListRuleExprState,
 	T_PartListNullTestExprState,
+    T_AggExprIdState,
 
 	/*
 	 * TAGS FOR PLANNER NODES (relation.h)
@@ -910,7 +910,6 @@ typedef enum AggStrategy
 	AGG_PLAIN,					/* simple agg across all input rows */
 	AGG_SORTED,					/* grouped agg, input must be sorted */
 	AGG_HASHED,					/* grouped agg, use internal hashtable */
-	AGG_SHADOWELIMINATE            /* shadow eliminate agg, use multidqa result eliminate shadow expr */
 } AggStrategy;
 
 /*

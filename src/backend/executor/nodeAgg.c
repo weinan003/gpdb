@@ -261,8 +261,6 @@ static bool find_unaggregated_cols_walker(Node *node, Bitmapset **colnos);
 static TupleTableSlot *agg_retrieve_direct(AggState *aggstate);
 static void agg_fill_hash_table(AggState *aggstate);
 static TupleTableSlot *agg_retrieve_hash_table(AggState *aggstate);
-static TupleTableSlot *split_tup_agg_retrieve_direct(AggState  *node);
-static TupleTableSlot *shadow_eliminate_agg_retrieve_direct(AggState *node);
 static void ExecAggExplainEnd(PlanState *planstate, struct StringInfoData *buf);
 static void ExecEagerFreeAgg(AggState *node);
 static TupleTableSlot *agg_retrieve_hash_table_internal(AggState *aggstate);
@@ -714,6 +712,27 @@ advance_transition_function(AggState *aggstate,
 }
 
 /*
+ * fetch_trans_arg_att
+ */
+static AttrNumber
+fetch_trans_arg_att(List *args)
+{
+    /*
+     * the child node SplitTuple shoud calculate all agg expr
+     * value done, so the arg list should only have single var.
+     */
+    Assert(list_length(args) == 1);
+
+    ListCell *lc = list_head(args);
+    GenericExprState *gES = (GenericExprState *)lfirst(lc);
+
+    Assert(IsA(gES->arg->expr,Var));
+
+    Var *var = (Var *)gES->arg->expr;
+
+    return var->varattno;
+}
+/*
  * Advance each aggregate transition state for one input tuple.  The input
  * tuple has been stored in tmpcontext->ecxt_outertuple, so that it is
  * accessible to ExecEvalExpr.  pergroup is the array of per-group structs to
@@ -753,7 +772,20 @@ advance_aggregates(AggState *aggstate, AggStatePerGroup pergroup)
 
 		/* Evaluate the current input expressions for this aggregate */
 		slot = ExecProject(pertrans->evalproj, NULL);
-		slot_getallattrs(slot);
+        slot_getallattrs(slot);
+
+        /* if AggExprId in input, trans function expr should match the value */
+        if(aggstate->agg_expr_id > 0)
+        {
+            AttrNumber attno, exprid;
+            Datum *input_vtup = aggstate->tmpcontext->ecxt_outertuple->PRIVATE_tts_values;
+
+            attno = fetch_trans_arg_att(pertrans->args);
+            exprid = input_vtup[aggstate->agg_expr_id - 1];
+
+            if(attno != exprid)
+                continue;
+        }
 
 		if (pertrans->numSortCols > 0)
 		{
@@ -1758,9 +1790,6 @@ ExecAgg(AggState *node)
 					agg_fill_hash_table(node);
 				result = agg_retrieve_hash_table(node);
 				break;
-			case AGG_SHADOWELIMINATE:
-				result = shadow_eliminate_agg_retrieve_direct(node);
-				break;
 			default:
 				result = agg_retrieve_direct(node);
 				break;
@@ -1771,43 +1800,6 @@ ExecAgg(AggState *node)
 	}
 
 	return NULL;
-}
-static TupleTableSlot *
-shadow_eliminate_agg_retrieve_direct(AggState *node)
-{
-    TupleTableSlot  *result;
-	TupleTableSlot  *input_tuple;
-    ExprContext     *econtext;
-
-	input_tuple = fetch_input_tuple(node);
-	econtext = node->ss.ps.ps_ExprContext;
-
-	if (TupIsNull(input_tuple))
-	{
-		node->agg_done = TRUE;
-		return NULL;
-	}
-
-	slot_getallattrs(input_tuple);
-
-	Datum *values = slot_get_values(input_tuple);
-	bool  *isnulls = slot_get_isnull(input_tuple);
-	ListCell *lc;
-	int idx, targetIdx;
-	foreach(lc, node->shadow_idx)
-	{
-		idx = lfirst_int(lc);
-		Agg *agg = (Agg *)node->ss.ps.plan;
-		targetIdx = agg->shadowMap[idx];
-		values[targetIdx] = values[idx];
-		isnulls[targetIdx] = false;
-	}
-
-	econtext->ecxt_outertuple = input_tuple;
-	ResetExprContext(econtext);
-
-	result = project_aggregates(node);
-	return result;
 }
 
 /*
@@ -2053,6 +2045,8 @@ agg_retrieve_direct(AggState *aggstate)
 				 */
 				for (;;)
 				{
+				    slot_getallattrs(tmpcontext->ecxt_outertuple);
+
 					if (DO_AGGSPLIT_COMBINE(aggstate->aggsplit))
 						combine_aggregates(aggstate, pergroup);
 					else
@@ -2275,7 +2269,7 @@ agg_retrieve_hash_table_internal(AggState *aggstate)
 		 * for it, so that it can be used in ExecProject.
 		 */
 		ExecStoreMinimalTuple((MemTuple)entry->tuple_and_aggs, firstSlot, false);
-		pergroup = (AggStatePerGroup)((char *)entry->tuple_and_aggs + 
+		pergroup = (AggStatePerGroup)((char *)entry->tuple_and_aggs +
 					      MAXALIGN(memtuple_get_size((MemTuple)entry->tuple_and_aggs)));
 
 		finalize_aggregates(aggstate, peragg, pergroup, 0);
@@ -2950,16 +2944,7 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 	aggstate->mem_manager.manager = aggstate;
 	aggstate->mem_manager.realloc_ratio = 1;
 
-	if (node->aggstrategy == AGG_SHADOWELIMINATE)
-	{
-		int sz = node->mapSz;
-
-		for(int i = 0; i < sz; i++)
-		{
-			if (node->shadowMap[i])
-				aggstate->shadow_idx = lappend_int(aggstate->shadow_idx, i);
-		}
-	}
+	aggstate->agg_expr_id = node->agg_expr_id;
 
 	return aggstate;
 }
@@ -3464,11 +3449,6 @@ ExecEndAgg(AggState *node)
 	/* And ensure any agg shutdown callbacks have been called */
 	for (setno = 0; setno < numGroupingSets; setno++)
 		ReScanExprContext(node->aggcontexts[setno]);
-
-	if (((Agg *)node->ss.ps.plan)->aggstrategy == AGG_SHADOWELIMINATE)
-	{
-		list_free(node->shadow_idx);
-	}
 
 	/*
 	 * We don't actually free any ExprContexts here (see comment in

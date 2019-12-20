@@ -241,3 +241,18 @@ SELECT distinct C.z, count(distinct FS.x), count(distinct FS.y) FROM (SELECT i A
 
 
 drop table foo_mdqa;
+
+-- non-strict agg test
+
+-- Like COUNT(col), but also counts NULLs
+create or replace function countall_trans(c int, newval int) returns int as $$
+  SELECT $1 + 1;
+$$ language sql;
+create aggregate countall(sfunc = countall_trans, basetype = int, stype = int, initcond = 0, combinefunc = int4pl);
+
+-- Test table
+create table nonullstab (a int, b int);
+insert into nonullstab select 1, 1 from generate_series(1, 100);
+
+-- This returns wrong result. countall(distinct a) should return 1. 
+select countall(distinct a), count(distinct b) from nonullstab;

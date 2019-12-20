@@ -1128,8 +1128,8 @@ typedef struct Agg
 	/* Stream entries when out of memory instead of spilling to disk */
 	bool		streaming;
 
-	int         mapSz;
-	int         *shadowMap;
+    /* if input tuple contain AggExprId, save the tlist index */
+    Index       agg_expr_id;
 } Agg;
 
 /* ---------------

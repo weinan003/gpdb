@@ -12,6 +12,7 @@
 #include "postgres.h"
 #include "executor/executor.h"
 #include "executor/nodeTupleSplit.h"
+#include "optimizer/tlist.h"
 
 /* -----------------
  * ExecInitTupleSplit
@@ -24,7 +25,6 @@ TupleSplitState *ExecInitTupleSplit(TupleSplit *node, EState *estate, int eflags
 {
     TupleSplitState     *tup_spl_state;
     Plan                *outerPlan;
-    ExprContext         *econtext;
 
     /* check for unsupported flags */
     Assert(!(eflags & (EXEC_FLAG_BACKWARD | EXEC_FLAG_MARK)));
@@ -82,6 +82,17 @@ TupleSplitState *ExecInitTupleSplit(TupleSplit *node, EState *estate, int eflags
      */
     tup_spl_state->isnull_orig = (bool *) palloc0(sizeof(bool) * list_length(outerPlan(node)->targetlist));
 
+    tup_spl_state->dqa_expr_subentry_map
+            = (AttrNumber *) palloc0(sizeof(AttrNumber) * node->numDisCols);
+
+    for(int i = 0; i < node->numDisCols; i ++)
+    {
+        Plan *subplan = node->plan.lefttree;
+        TargetEntry *entry_in_sub = (TargetEntry *)list_nth(subplan->targetlist, node->distColIdx[i] - 1);
+        TargetEntry *entry = get_sortgroupref_tle(entry_in_sub->ressortgroupref, node->plan.targetlist);
+        tup_spl_state->dqa_expr_subentry_map[i] = entry->resno;
+    }
+
     return tup_spl_state;
 }
 
@@ -124,11 +135,15 @@ struct TupleTableSlot *ExecTupleSplit(TupleSplitState *node)
     /* populate isnull if the column belone to other distinct and is not a group by */
     for (Index idx = 0; idx < plan->numDisCols; idx++)
     {
-        if (!(plan->distColIdx[idx] == plan->distColIdx[node->idx]
-                || bms_is_member(plan->distColIdx[node->idx],
-                                 node->grpbySet)))
+        if(bms_is_member(plan->distColIdx[idx], node->grpbySet))
+            continue;
+
+        if(plan->distColIdx[idx] != plan->distColIdx[node->idx])
             isnull[plan->distColIdx[idx] - 1] = true;
     }
+
+
+    node->currentExprId = node->dqa_expr_subentry_map[node->idx];
 
     node->idx = (node->idx + 1) % plan->numDisCols;
 

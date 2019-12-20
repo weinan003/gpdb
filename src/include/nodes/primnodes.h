@@ -367,6 +367,16 @@ typedef struct GroupId
 } GroupId;
 
 /*
+ * AggExprId -
+ *    AggExprId is a hint for Aggregation which agg expr in a split
+ *    tuple.
+ */
+typedef struct AggExprId
+{
+    Expr        xpr;
+} AggExprId;
+
+/*
  * GroupingFunc
  *
  * A GroupingFunc is a GROUPING(...) expression, which behaves in many ways
@@ -1655,10 +1665,4 @@ typedef struct PartListNullTestExpr
 	int			level;			/* partitioning level */
 	NullTestType nulltesttype;	/* IS NULL, IS NOT NULL */
 } PartListNullTestExpr;
-
-typedef struct ShadowExpr
-{
-	Expr    xpr;
-	Expr    *expr;
-} ShadowExpr;
 #endif   /* PRIMNODES_H */

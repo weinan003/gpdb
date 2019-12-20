@@ -216,6 +216,9 @@ static Datum ExecEvalPartListRuleExpr(PartListRuleExprState *exprstate,
 static Datum ExecEvalPartListNullTestExpr(PartListNullTestExprState *exprstate,
 							ExprContext *econtext,
 							bool *isNull, ExprDoneCond *isDone);
+static Datum ExecEvalAggExprId(AggExprIdState *exprstate,
+                               ExprContext *econtext,
+                               bool *isNull, ExprDoneCond *isDone);
 
 static bool ExecIsExprUnsafeToConst_walker(Node *node, void *context);
 static bool ExecIsExprUnsafeToConst(Node *node);
@@ -5110,6 +5113,29 @@ static Datum ExecEvalPartListNullTestExpr(PartListNullTestExprState *exprstate,
 	return BoolGetDatum(false);
 }
 
+static Datum ExecEvalAggExprId(AggExprIdState *exprstate,
+                               ExprContext *econtext,
+                               bool *isNull, ExprDoneCond *isDone)
+{
+    Assert(NULL != exprstate);
+    Assert(NULL != isNull);
+    if(IsA(exprstate->parent,TupleSplitState))
+    {
+
+        TupleSplitState *tsState = (TupleSplitState *)exprstate->parent;
+
+        *isNull = false;
+        *isDone = ExprSingleResult;
+
+        return Int32GetDatum(tsState->currentExprId);
+    }
+
+    *isNull = true;
+    *isDone = ExprSingleResult;
+    return Int32GetDatum(0);
+}
+
+
 /* ----------------------------------------------------------------
  *		ExecEvalCoerceViaIO
  *
@@ -6155,13 +6181,17 @@ ExecInitExpr(Expr *node, PlanState *parent)
 			}
 			break;
 
-		case T_ShadowExpr:
-			{
-				ShadowExpr *sexpr = (ShadowExpr *) node;
-				state = ExecInitExpr(sexpr->expr, parent);
-				return state;
-			}
-			break;
+	    case T_AggExprId:
+            {
+                AggExprIdState *exprstate = makeNode(AggExprIdState);
+
+                exprstate->xprstate.evalfunc = (ExprStateEvalFunc) ExecEvalAggExprId;
+                exprstate->parent = parent;
+
+                state = (ExprState *) exprstate;
+            }
+            break;
+
 		default:
 			elog(ERROR, "unrecognized node type: %d",
 				 (int) nodeTag(node));

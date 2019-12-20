@@ -58,16 +58,16 @@ typedef struct
 
 typedef struct
 {
-	PathTarget *input_target;
+    PathTarget *target;                     /* finalize agg tlist */
+    PathTarget *partial_grouping_target;    /* partial agg tlist */
+    PathTarget *input_target;               /* AggExprId + subpath_proj_target */
+    PathTarget *subpath_proj_target;        /* input tuple tlist + DQA expr */
+
 	List       *dqa_group_clause;
 
-	int         dqas_num;
-	Bitmapset  *dqas_ref_bm;
+	int         dqas_num;                   /* dqas_ref_bm size */
+	Bitmapset  *dqas_ref_bm;                /* DQA expr sortgroupref bitmap */
 
-	PathTarget *target;
-	PathTarget *partial_grouping_target;
-	int         map_sz;
-	int        *shadow_map;
 } cdb_distinct_info;
 
 static void add_twostage_group_agg_path(PlannerInfo *root,
@@ -695,27 +695,18 @@ add_single_dqa_hash_agg_path(PlannerInfo *root,
  * For us target is that using single execution path to handle all DQAs, so
  * before remove duplication a SplitTuple node is created. This node handle
  * each input tuple to n output tuples(n is DQA expr number). Each output tuple
- * only contain one DQA expr with all GROUP by expr. For example,
+ * only contain an AggExprId, one DQA expr and all GROUP by expr . For example,
  * SELECT DQA(a), DQA(b) FROM foo GROUP BY c;
  * After the tuple split, two tuples are generated:
- * ---------------
- * | a | n/a | c |
- * ---------------
- * ---------------
- * | n/a | b | c |
- * ---------------
+ * -------------------
+ * | 1 | a | n/a | c |
+ * -------------------
+ * -------------------
+ * | 2 | n/a | b | c |
+ * -------------------
  *
- * If a query's DQA expr is same as GROUP BY, a ShadowExpr will replace GROUP BY
- * expr. For example,
- * SELECT DQA(a), DQA(b) FROM foo GROUP BY a;
- * The query will translate to
- * SELECT DQA(a), DQA(b) FROM foo GROUP BY a'; (For all a' == a)
- *
- * Next,QE redistribute these tuples by DQA and GROUP BY exprs. After this step,
- * we can remove duplicated and execute normal two stage aggregates without distinct.
- *
- * In final stage, if we involve ShadowExpr in, ShadowEliminate node copy the ShadowExpr
- * value back to its relavent Expr and remove ShadowExpr in projection.
+ * In an aggregate executor, if input tuple contain AggExprId, that means the tuple is
+ * splited, checking AggExprId's value is match Aggref expr.
  */
 static void
 add_multi_dqas_hash_agg_path(PlannerInfo *root,
@@ -740,19 +731,17 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	 * constrain child tlist when it create subplan. Thus, GROUP BY expr
 	 * may not find in scan targetlist.
 	 */
-	path = apply_projection_to_path(root, path->parent, path, info->input_target);
+	path = apply_projection_to_path(root, path->parent, path, info->subpath_proj_target);
 
 	/*
-	 * Eliminate Shadow Expr(If contained)
-	 * ->Finalize Aggregate
+	 * Finalize Aggregate
 	 *   -> Gather Motion
 	 *        -> Partial Aggregate
 	 *             -> HashAggregate, to remote duplicates
-	 *                  -> Redistribute Motion (according to DISTINCT expr)
+	 *                  -> Redistribute Motion
 	 *                       -> Split Ordered Aggregate  (Split tuple according to DISTINCT expr)
 	 *                            -> input
 	 */
-	int numsegments = path->locus.numsegments;
 
 	path = (Path *)create_tup_split_path(root,
 										 output_rel,
@@ -762,24 +751,35 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 										 info->dqas_ref_bm,
 										 info->dqas_num);
 
-	AggClauseCosts DedupCost;
+	AggClauseCosts DedupCost = {};
     get_agg_clause_costs(root, (Node *) info->input_target->exprs,
                          AGGSPLIT_SIMPLE,
                          &DedupCost);
 
+
 	if (gp_enable_dqa_pruning)
-		path = (Path *) create_agg_path(root,
-										output_rel,
-										path,
-										info->input_target,
-										AGG_HASHED,
-										AGGSPLIT_SIMPLE,
-										true, /* streaming */
-										info->dqa_group_clause,
-										NIL,
-										&DedupCost,
-										cxt->dNumGroups * getgpsegmentCount(),
-										&hash_info);
+    {
+        path = (Path *) create_agg_path(root,
+                                        output_rel,
+                                        path,
+                                        info->input_target,
+                                        AGG_HASHED,
+                                        AGGSPLIT_SIMPLE,
+                                        true, /* streaming */
+                                        NIL,
+                                        NIL,
+                                        &DedupCost,
+                                        cxt->dNumGroups * getgpsegmentCount(),
+                                        &hash_info);
+
+        /*
+         * FIXME: set group clause after path create is for cheating current cost model.
+         * Upstream cost calculation is not totally suitable in MPP, the MULTIDQA result
+         * sometime is larger than single node Aggregation. It must be wrong. We should
+         * have gpdb private cost method.
+         */
+        ((AggPath *)path)->groupClause = info->dqa_group_clause;
+    }
 
 	distinct_locus = cdb_choose_grouping_locus(root, path,
 											   info->input_target,
@@ -828,8 +828,6 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 									cxt->dNumGroups * getgpsegmentCount(),
 									&hash_info);
 
-
-
 	CdbPathLocus singleQE_locus;
 	CdbPathLocus_MakeSingleQE(&singleQE_locus, getgpsegmentCount());
 	path = cdbpath_create_motion_path(root,
@@ -850,23 +848,6 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 									cxt->agg_final_costs,
 									cxt->dNumGroups,
 									&hash_info);
-
-	/* Eliminate ShadowExpr */
-	if (list_length(cxt->target->exprs) < list_length(info->target->exprs))
-	{
-		/*
-		 * If the info tlist length larger than cxt, some ShadowExpr involved
-		 * into SplitTuple step. ShadowEliminate node will copy ShadowExpr result
-		 * to its relavent Expr and remove ShadowExpr from output tlist.
-		 */
-		path = (Path *) create_shadow_eliminate_path(root,
-													 output_rel,
-													 path,
-													 cxt->target,
-													 1,
-													 info->map_sz,
-													 info->shadow_map);
-	}
 
 	add_path(output_rel, path);
 }
@@ -1095,39 +1076,12 @@ recognise_dqa_type(PlannerInfo *root,
 	return ret;
 }
 
-static ShadowExpr*
-makeShadowExpr(Expr *expr)
-{
-	ShadowExpr *sexpr = makeNode(ShadowExpr);
-	sexpr->expr = expr;
-	return sexpr;
-}
-
-static int
-mutateShadowExpr(Expr* expr, List *l)
-{
-	int i = 0;
-	ListCell *lc1 ;
-	foreach(lc1, l)
-	{
-		Expr *pExpr = lfirst(lc1);
-		if (equal(expr, pExpr))
-		{
-			lfirst(lc1) = makeShadowExpr(pExpr);
-			return i;
-		}
-		i ++;
-	}
-	return -1;
-}
-
 /*
  * fetch_multi_dqas_info
  * 1. fetch all dqas path required information as single dqa's function.
  *
- * 2. mutate Pathtarget expr to ShadowExpr if the expr is referenced by
- * GROUP BY and DISTINCT at the same time. It is a kind of preparatory
- * work for Split Tuple.
+ * 2. Appending an AggExprId into Pathtarget to indicate which DQA expr
+ * contains in the output tuple after TupleSplit.
  *
  */
 static void
@@ -1136,17 +1090,29 @@ fetch_multi_dqas_info(PlannerInfo *root,
 					  cdb_agg_planning_context *ctx,
 					  cdb_distinct_info *info)
 {
-	Index		maxRef;
+    Index		maxRef;
 	ListCell    *lc;
 	PathTarget *ctarget = copy_pathtarget(ctx->target);
 	PathTarget *cpartial_grouping_target = copy_pathtarget(ctx->partial_grouping_target);
 
 	info->input_target = copy_pathtarget(path->pathtarget);
-	info->map_sz = list_length(ctx->target->exprs);
-	info->shadow_map = palloc0(sizeof(int) * info->map_sz);
+    info->subpath_proj_target = copy_pathtarget(path->pathtarget);
+
+    /* Give a hint for Aggregation which agg expr remain in tuple */
+    {
+        AggExprId *a_expr_id = makeNode(AggExprId);
+        info->input_target->exprs = lcons(a_expr_id, info->input_target->exprs);
+        info->input_target->sortgrouprefs = palloc0((list_length(path->pathtarget->exprs) + 1) * sizeof(Index));
+    }
+
+    /* Prepare a modifiable copy of the input path target */
 	maxRef = 0;
-	if (info->input_target->sortgrouprefs)
+	if (path->pathtarget->sortgrouprefs)
 	{
+        memcpy(info->input_target->sortgrouprefs + 1,
+               path->pathtarget->sortgrouprefs,
+               sizeof(list_length(path->pathtarget->exprs) * sizeof(Index)));
+
 		for (int idx = 0; idx < list_length(info->input_target->exprs); idx++)
 		{
 			if (info->input_target->sortgrouprefs[idx] > maxRef)
@@ -1154,7 +1120,9 @@ fetch_multi_dqas_info(PlannerInfo *root,
 		}
 	}
 	else
-		info->input_target->sortgrouprefs = (Index *) palloc0(list_length(info->input_target->exprs) * sizeof(Index));
+    {
+	    info->subpath_proj_target->sortgrouprefs = palloc0(list_length(path->pathtarget->exprs) * sizeof(Index));
+    }
 
 	foreach(lc, ctx->agg_costs->distinctAggrefs)
 	{
@@ -1167,7 +1135,6 @@ fetch_multi_dqas_info(PlannerInfo *root,
 		arg_tle = get_sortgroupref_tle(arg_sortcl->tleSortGroupRef, aggref->args);
 
 		ListCell *dqa_lc = NULL;
-		ListCell *dqa_shadow_lc = NULL;
 		int dqa_lc_idx;
 
 		/* find DQA expr and its ShadowExpr in PathTarget list */
@@ -1180,72 +1147,63 @@ fetch_multi_dqas_info(PlannerInfo *root,
 			{
 				dqa_lc = lcc;
 				dqa_lc_idx = idx;
-			}
-			else if (IsA(expr, ShadowExpr)
-					 && equal(arg_tle->expr, ((ShadowExpr *)expr)->expr))
-			{
-				dqa_shadow_lc = lcc;
-				break;
+                break;
 			}
 
 			idx ++;
 		}
 
-		/* If dqa_shadow_lc not null indicate that another DQA has modified */
-		if (!dqa_shadow_lc)
-		{
-			if (!dqa_lc)
-			{
-				/*
-				 * DQA expr does not in PathTarget
-				 *
-				 * SELECT DQA( a + 1 ) FROM foo;
-				 */
-				add_column_to_pathtarget(info->input_target, arg_tle->expr, ++maxRef);
-				ref_dqa_expr(info, arg_sortcl, maxRef);
-			}
-			else if (dqa_lc && info->input_target->sortgrouprefs[dqa_lc_idx] == 0)
-			{
-				/*
-				 * DQA expr in PathTarget but no reference
-				 *
-				 * SELECT DQA(a) FROM foo;
-				 */
-				info->input_target->sortgrouprefs[dqa_lc_idx] = ++maxRef;
-				ref_dqa_expr(info, arg_sortcl, maxRef);
-			}
-			else
-			{
-				/*
-				 * DQA and GROUP BY reference to same expr
-				 *
-				 * SELECT DQA(a) FROM foo GROUP BY a;
-				 * change the query as
-				 * SELECT DQA(a) FROM foo GROUP BY a'; (For all a' == a)
-				 */
-				Index exprRef = info->input_target->sortgrouprefs[dqa_lc_idx];
-				if (!bms_is_member(exprRef, info->dqas_ref_bm))
-				{
-					/* DQA expr also in GROUP BY clause */
-					Expr *dqa_expr = (Expr *)lfirst(dqa_lc);
-					lfirst(dqa_lc) = makeShadowExpr(dqa_expr);
+        if (!dqa_lc)
+        {
+            /*
+             * DQA expr does not in PathTarget
+             *
+             * SELECT DQA( a + 1 ) FROM foo;
+             */
+            add_column_to_pathtarget(info->input_target, arg_tle->expr, ++maxRef);
+            add_column_to_pathtarget(info->subpath_proj_target, arg_tle->expr, maxRef);
+            ref_dqa_expr(info, arg_sortcl, maxRef);
+        }
+        else if (dqa_lc && info->input_target->sortgrouprefs[dqa_lc_idx] == 0)
+        {
+            /*
+             * DQA expr in PathTarget but no reference
+             *
+             * SELECT DQA(a) FROM foo;
+             */
+            info->input_target->sortgrouprefs[dqa_lc_idx] = ++maxRef;
+            info->subpath_proj_target->sortgrouprefs[dqa_lc_idx - 1] = maxRef;
+            ref_dqa_expr(info, arg_sortcl, maxRef);
+        }
+        else
+        {
+            /*
+             * DQA expr in PathTarget and referenced by GROUP BY clause
+             *
+             * SELECT DQA(a) FROM foo GROUP BY a;
+             */
+            Index exprRef = info->input_target->sortgrouprefs[dqa_lc_idx];
+            info->dqas_ref_bm = bms_add_member(info->dqas_ref_bm, exprRef);
+            info->dqas_num ++;
+        }
+    }
 
-					mutateShadowExpr(dqa_expr, cpartial_grouping_target->exprs);
-					int shadow_idx = mutateShadowExpr(dqa_expr, ctarget->exprs);
+	/* add AggExprId into GROUPBY clause */
+    {
+        Oid eqop;
+        bool hashable;
+        get_sort_group_operators(INT4OID, false, true, false, NULL, &eqop, NULL, &hashable);
 
-					add_column_to_pathtarget(cpartial_grouping_target, arg_tle->expr, 0);
-					add_column_to_pathtarget(ctarget, arg_tle->expr, 0);
-					info->shadow_map[shadow_idx] = list_length(ctarget->exprs) - 1;
+        SortGroupClause *sortcl = makeNode(SortGroupClause);
+        sortcl->tleSortGroupRef = ++maxRef;
+        sortcl->hashable = hashable;
+        sortcl->eqop = eqop;
+        info->dqa_group_clause = lcons(sortcl, info->dqa_group_clause);
+        info->input_target->sortgrouprefs[0] = sortcl->tleSortGroupRef;
+    }
 
-					add_column_to_pathtarget(info->input_target, arg_tle->expr, ++maxRef);
-					ref_dqa_expr(info, arg_sortcl, maxRef);
-				}
-			}
-		}
-	}
-
-	info->dqa_group_clause = list_concat(list_copy(root->parse->groupClause),
-										 info->dqa_group_clause);
+    info->dqa_group_clause = list_concat(info->dqa_group_clause,
+                                         list_copy(root->parse->groupClause));
 	info->target = ctarget;
 	info->partial_grouping_target = cpartial_grouping_target;
 }

@@ -624,7 +624,6 @@ plan_tree_mutator(Node *node,
 				FLATCOPY(newagg, agg, Agg);
 				PLANMUTATE(newagg, agg);
 				COPYARRAY(newagg, agg, numCols, grpColIdx);
-				COPYARRAY(newagg, agg, mapSz, shadowMap);
 				return (Node *) newagg;
 			}
 			break;

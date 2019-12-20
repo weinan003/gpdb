@@ -281,9 +281,9 @@ exprType(const Node *expr)
 		case T_PartListNullTestExpr:
 			type = BOOLOID;
 			break;
-		case T_ShadowExpr:
-			type = exprType((Node *) ((ShadowExpr *) expr)->expr);
-			break;
+        case T_AggExprId:
+            type = INT4OID;
+            break;
 
 		default:
 			elog(ERROR, "unrecognized node type: %d", (int) nodeTag(expr));
@@ -971,9 +971,9 @@ exprCollation(const Node *expr)
 			 */
 			coll = InvalidOid;
 			break;
-		case T_ShadowExpr:
-			coll = exprCollation((Node *) ((ShadowExpr *)expr)->expr);
-			break;
+        case T_AggExprId:
+            coll = InvalidOid;
+            break;
 		default:
 			elog(ERROR, "unrecognized node type: %d", (int) nodeTag(expr));
 			coll = InvalidOid;	/* keep compiler quiet */
@@ -1939,10 +1939,9 @@ expression_tree_walker(Node *node,
 		case T_PartBoundOpenExpr:
 		case T_PartListRuleExpr:
 		case T_PartListNullTestExpr:
+        case T_AggExprId:
 			/* primitive node types with no expression subnodes */
 			break;
-		case T_ShadowExpr:
-			return walker(((ShadowExpr *) node)->expr, context);
 		case T_WithCheckOption:
 			return walker(((WithCheckOption *) node)->qual, context);
 		case T_Aggref:
@@ -3225,16 +3224,14 @@ expression_tree_mutator(Node *node,
 				return (Node *) newnode;
 			}
 			break;
-		case T_ShadowExpr:
-			{
-				ShadowExpr *sExpr = (ShadowExpr *)node;
-				ShadowExpr *newSExpr;
-
-				FLATCOPY(newSExpr, sExpr, ShadowExpr);
-				MUTATE(newSExpr->expr, sExpr->expr, Expr *);
-				return (Node *)newSExpr;
-			}
-			break;
+	    case T_AggExprId:
+            {
+                AggExprId *exprId = (AggExprId *)node;
+                AggExprId *new_exprId;
+                FLATCOPY(new_exprId, exprId, AggExprId);
+                return (Node *)new_exprId;
+            }
+            break;
 		default:
 			elog(ERROR, "unrecognized node type: %d",
 				 (int) nodeTag(node));

@@ -1364,10 +1364,6 @@ ExplainNode(PlanState *planstate, List *ancestors,
 						pname = "HashAggregate";
 						strategy = "Hashed";
 						break;
-					case AGG_SHADOWELIMINATE:
-						pname = "ShadowEliminate";
-						strategy = "Plain";
-						break;
 					default:
 						pname = "Aggregate ???";
 						strategy = "???";

@@ -422,8 +422,7 @@ _outAgg(StringInfo str, Agg *node)
 	WRITE_NODE_FIELD(chain);
 	WRITE_BOOL_FIELD(streaming);
 
-	WRITE_INT_FIELD(mapSz);
-	WRITE_INT_ARRAY(shadowMap, node->mapSz, int);
+	WRITE_UINT_FIELD(agg_expr_id);
 }
 
 static void
@@ -1310,6 +1309,11 @@ _outCreateAmStmt(StringInfo str, const CreateAmStmt *node)
 	WRITE_NODE_FIELD(handler_name);
 	WRITE_INT_FIELD(amtype);
 }
+static void
+_outAggExprId(StringInfo str, const AggExprId *node)
+{
+    WRITE_NODE_TYPE("AGGEXPRID");
+}
 
 /*
  * _outNode -
@@ -1543,9 +1547,6 @@ _outNode(StringInfo str, void *obj)
 				break;
 			case T_GroupId:
 				_outGroupId(str, obj);
-				break;
-			case T_ShadowExpr:
-				_outShadowExpr(str, obj);
 				break;
 			case T_WindowFunc:
 				_outWindowFunc(str, obj);
@@ -2217,6 +2218,9 @@ _outNode(StringInfo str, void *obj)
 			case T_CreateAmStmt:
 				_outCreateAmStmt(str, obj);
 				break;
+            case T_AggExprId:
+                _outAggExprId(str, obj);
+                break;
 
 			default:
 				elog(ERROR, "could not serialize unrecognized node type: %d",

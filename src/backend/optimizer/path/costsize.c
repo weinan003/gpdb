@@ -1998,8 +1998,7 @@ cost_agg(Path *path, PlannerInfo *root,
 	/* Use all-zero per-aggregate costs if NULL is passed */
 	if (aggcosts == NULL)
 	{
-		Assert(aggstrategy == AGG_HASHED
-			   || aggstrategy == AGG_SHADOWELIMINATE);
+		Assert(aggstrategy == AGG_HASHED);
 
 		MemSet(&dummy_aggcosts, 0, sizeof(AggClauseCosts));
 		aggcosts = &dummy_aggcosts;
@@ -2055,12 +2054,6 @@ cost_agg(Path *path, PlannerInfo *root,
 			startup_cost += disable_cost;
 			total_cost += disable_cost;
 		}
-	}
-	else if (aggstrategy == AGG_SHADOWELIMINATE)
-	{
-		output_tuples = input_tuples;
-		startup_cost = input_total_cost;
-		total_cost = startup_cost + cpu_operator_cost * input_tuples;
 	}
 	else
 	{
