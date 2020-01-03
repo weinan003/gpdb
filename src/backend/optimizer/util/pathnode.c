@@ -4114,7 +4114,7 @@ create_tup_split_path(PlannerInfo *root,
 					  Path *subpath,
 					  PathTarget *target,
 					  List *groupClause,
-					  Bitmapset *bitmapset,
+					  Bitmapset **bitmapset,
 					  int bmSz)
 {
     TupleSplitPath *pathnode = makeNode(TupleSplitPath);
@@ -4134,8 +4134,11 @@ create_tup_split_path(PlannerInfo *root,
     pathnode->subpath = subpath;
     pathnode->groupClause = groupClause;
 
-	pathnode->dqas_ref_bm = bms_copy(bitmapset);
-	pathnode->dqas_num = bmSz;
+    pathnode->dqas_num = bmSz;
+
+	pathnode->agg_args_id_bm = palloc0(sizeof(Bitmapset *) * bmSz);
+	for (int i = 0 ; i < bmSz; i ++)
+        pathnode->agg_args_id_bm[i] = bms_copy(bitmapset[i]);
 
     cost_tup_split(&pathnode->path, root, bmSz,
                    subpath->startup_cost, subpath->total_cost,

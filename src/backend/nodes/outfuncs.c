@@ -999,9 +999,8 @@ _outTupleSplit(StringInfo str, const TupleSplit *node)
         appendStringInfo(str, " %d", node->grpColIdx[i]);
 
     WRITE_INT_FIELD(numDisCols);
-    appendStringInfoString(str, " :distColIdx");
-    for (i = 0; i < node->numDisCols; i++)
-        appendStringInfo(str, " %d", node->distColIdx[i]);
+    for (i = 0; i < node->numDisCols * 2; i++)
+        WRITE_BITMAPSET_FIELD(dqa_args_attr_num[i]);
 }
 #endif /* COMPILING_BINARY_FUNCS */
 

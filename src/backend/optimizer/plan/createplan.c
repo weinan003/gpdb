@@ -1778,7 +1778,7 @@ create_tup_split_plan(PlannerInfo *root, TupleSplitPath *best_path)
 
     tlist = build_path_tlist(root, &best_path->path);
 
-    plan = make_tup_split(tlist, best_path->dqas_num, best_path->dqas_ref_bm,
+    plan = make_tup_split(tlist, best_path->dqas_num, best_path->agg_args_id_bm,
                           list_length(best_path->groupClause),
                           extract_grouping_cols(best_path->groupClause,
                                                 subplan->targetlist),
@@ -7435,7 +7435,7 @@ make_agg(List *tlist, List *qual,
 
 TupleSplit *
 make_tup_split(List *tlist,
-               int numDQAs, Bitmapset *dqas_ref_bm,
+               int numDQAs, Bitmapset **dqas_ref_bms,
                int numGroupCols, AttrNumber *grpColIdx,
                Plan *lefttree)
 {
@@ -7445,15 +7445,19 @@ make_tup_split(List *tlist,
     node->numCols = numGroupCols;
     node->grpColIdx = grpColIdx;
     node->numDisCols = numDQAs;
-    node->distColIdx = palloc0(sizeof(AttrNumber) * numDQAs);
 
-    int i = 0;
-    int j = 0;
-    while ((i = bms_first_member(dqas_ref_bm)) >= 0)
+    node->dqa_args_attr_num = palloc0(sizeof(Bitmapset *) * numDQAs * 2);
+    for (int id = 0; id < numDQAs; id++)
     {
-        TargetEntry *te = get_sortgroupref_tle((Index)i, lefttree->targetlist);
-        node->distColIdx[j] = te->resno;
-        j++;
+        int i = 0;
+        while ((i = bms_first_member(dqas_ref_bms[id])) >= 0)
+        {
+            TargetEntry *te = get_sortgroupref_tle((Index)i, lefttree->targetlist);
+            node->dqa_args_attr_num[id] = bms_add_member(node->dqa_args_attr_num[id], te->resno);
+
+            te = get_sortgroupref_tle((Index)i, tlist);
+            node->dqa_args_attr_num[numDQAs + id] = bms_add_member(node->dqa_args_attr_num[numDQAs + id], te->resno);
+        }
     }
 
     plan->targetlist = tlist;

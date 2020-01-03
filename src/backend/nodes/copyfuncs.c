@@ -1188,7 +1188,9 @@ _copyTupleSplit(const TupleSplit *from)
     }
 
     COPY_SCALAR_FIELD(numDisCols);
-    COPY_POINTER_FIELD(distColIdx, from->numDisCols);
+    for (int i = 0; i < from->numDisCols * 2; i ++)
+        COPY_BITMAPSET_FIELD(dqa_args_attr_num[i]);
+
     return newnode;
 }
 /*

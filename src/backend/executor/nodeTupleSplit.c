@@ -82,16 +82,11 @@ TupleSplitState *ExecInitTupleSplit(TupleSplit *node, EState *estate, int eflags
      */
     tup_spl_state->isnull_orig = (bool *) palloc0(sizeof(bool) * list_length(outerPlan(node)->targetlist));
 
-    tup_spl_state->dqa_expr_subentry_map
-            = (AttrNumber *) palloc0(sizeof(AttrNumber) * node->numDisCols);
-
-    for(int i = 0; i < node->numDisCols; i ++)
-    {
-        Plan *subplan = node->plan.lefttree;
-        TargetEntry *entry_in_sub = (TargetEntry *)list_nth(subplan->targetlist, node->distColIdx[i] - 1);
-        TargetEntry *entry = get_sortgroupref_tle(entry_in_sub->ressortgroupref, node->plan.targetlist);
-        tup_spl_state->dqa_expr_subentry_map[i] = entry->resno;
-    }
+    /*
+     * add all DQA expr AttrNum into a bitmapset
+     */
+    for (int i = 0; i < node->numDisCols; i++)
+        tup_spl_state->all_dist_attr_num = bms_add_members(tup_spl_state->all_dist_attr_num, node->dqa_args_attr_num[i]);
 
     return tup_spl_state;
 }
@@ -133,17 +128,22 @@ struct TupleTableSlot *ExecTupleSplit(TupleSplitState *node)
     memcpy(isnull, node->isnull_orig, node->outerslot->PRIVATE_tts_nvalid);
 
     /* populate isnull if the column belone to other distinct and is not a group by */
-    for (Index idx = 0; idx < plan->numDisCols; idx++)
+    for (AttrNumber attno = 1; attno <= node->outerslot->PRIVATE_tts_nvalid ; attno++)
     {
-        if(bms_is_member(plan->distColIdx[idx], node->grpbySet))
+        if(bms_is_member(attno, node->grpbySet))
             continue;
 
-        if(plan->distColIdx[idx] != plan->distColIdx[node->idx])
-            isnull[plan->distColIdx[idx] - 1] = true;
+        /* If the column is relevant to current dqa skip it */
+        if(bms_is_member(attno, plan->dqa_args_attr_num[node->idx]))
+            continue;
+
+        /* If the column does not belone to any DQA, skip it */
+        if(!bms_is_member(attno, node->all_dist_attr_num))
+            continue;
+
+        isnull[attno - 1] = true;
     }
-
-
-    node->currentExprId = node->dqa_expr_subentry_map[node->idx];
+    node->currentExprId = node->idx;
 
     node->idx = (node->idx + 1) % plan->numDisCols;
 
