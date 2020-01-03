@@ -2690,6 +2690,8 @@ typedef struct AggState
 
     /* if input tuple contain AggExprId, save the tlist index */
 	Index       agg_expr_id;
+
+	Bitmapset   **dqa_args_attr_num;
 } AggState;
 
 typedef struct TupleSplitState
@@ -2702,7 +2704,7 @@ typedef struct TupleSplitState
     int             idx;
     TupleTableSlot  *outerslot;
     Index           currentExprId;
-    AttrNumber      *dqa_expr_subentry_map;
+    Bitmapset       *all_dist_attr_num;
 } TupleSplitState;
 
 typedef struct AggExprIdState

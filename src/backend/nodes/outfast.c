@@ -400,7 +400,9 @@ _outTupleSplit(StringInfo str, TupleSplit *node)
     WRITE_INT_FIELD(numCols);
     WRITE_INT_ARRAY(grpColIdx, node->numCols, AttrNumber);
     WRITE_INT_FIELD(numDisCols);
-    WRITE_INT_ARRAY(distColIdx, node->numDisCols, AttrNumber);
+
+    for (int i = 0; i < node->numDisCols * 2; i ++)
+        WRITE_BITMAPSET_FIELD(dqa_args_attr_num[i]);
 }
 
 static void

@@ -3084,7 +3084,13 @@ _readTupleSplit(void)
     READ_INT_FIELD(numCols);
     READ_ATTRNUMBER_ARRAY(grpColIdx, local_node->numCols);
     READ_INT_FIELD(numDisCols);
-    READ_ATTRNUMBER_ARRAY(distColIdx, local_node->numDisCols);
+
+    local_node->dqa_args_attr_num = palloc0(sizeof(Bitmapset *) * local_node->numDisCols * 2);
+    for (int i = 0; i < local_node->numDisCols * 2; i ++)
+    {
+        local_node->dqa_args_attr_num[i] = _readBitmapset();
+    }
+
     READ_DONE();
 }
 /*

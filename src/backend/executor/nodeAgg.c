@@ -712,27 +712,6 @@ advance_transition_function(AggState *aggstate,
 }
 
 /*
- * fetch_trans_arg_att
- */
-static AttrNumber
-fetch_trans_arg_att(List *args)
-{
-    /*
-     * the child node SplitTuple shoud calculate all agg expr
-     * value done, so the arg list should only have single var.
-     */
-    Assert(list_length(args) == 1);
-
-    ListCell *lc = list_head(args);
-    GenericExprState *gES = (GenericExprState *)lfirst(lc);
-
-    Assert(IsA(gES->arg->expr,Var));
-
-    Var *var = (Var *)gES->arg->expr;
-
-    return var->varattno;
-}
-/*
  * Advance each aggregate transition state for one input tuple.  The input
  * tuple has been stored in tmpcontext->ecxt_outertuple, so that it is
  * accessible to ExecEvalExpr.  pergroup is the array of per-group structs to
@@ -774,16 +753,15 @@ advance_aggregates(AggState *aggstate, AggStatePerGroup pergroup)
 		slot = ExecProject(pertrans->evalproj, NULL);
         slot_getallattrs(slot);
 
-        /* if AggExprId in input, trans function expr should match the value */
+        /* if AggExprId in input, trans function bitmap should match */
         if(aggstate->agg_expr_id > 0)
         {
-            AttrNumber attno, exprid;
+            AttrNumber exprid;
             Datum *input_vtup = aggstate->tmpcontext->ecxt_outertuple->PRIVATE_tts_values;
 
-            attno = fetch_trans_arg_att(pertrans->args);
             exprid = input_vtup[aggstate->agg_expr_id - 1];
 
-            if(attno != exprid)
+            if( !bms_equal(pertrans->dqa_args_attr_num, aggstate->dqa_args_attr_num[exprid]))
                 continue;
         }
 
@@ -2945,6 +2923,35 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 	aggstate->mem_manager.realloc_ratio = 1;
 
 	aggstate->agg_expr_id = node->agg_expr_id;
+
+	/* > 0: there is a TupleSplit node under agg */
+	if(aggstate->agg_expr_id > 0)
+    {
+        List *allTupleSplit = extract_nodes_plan((Plan*) node, T_TupleSplit, false);
+        Assert(list_length(allTupleSplit) == 1);
+
+        /* fetch TupleSplit provided bitmap sets for each trans function */
+        TupleSplit *tupleSplit = linitial(allTupleSplit);
+        aggstate->dqa_args_attr_num = &tupleSplit->dqa_args_attr_num[tupleSplit->numDisCols];
+
+        for (i = 0; i < aggstate->numtrans; i ++)
+        {
+            AggStatePerTrans pertrans = &aggstate->pertrans[i];
+
+            foreach(l, pertrans->args)
+            {
+                GenericExprState *gExpr = (GenericExprState *)lfirst(l);
+
+                /* All exprs should be calculated before TupleSplit */
+                Assert(IsA(gExpr->arg->expr,Var));
+
+                Var *var = (Var *)gExpr->arg->expr;
+
+                pertrans->dqa_args_attr_num =
+                        bms_add_member(pertrans->dqa_args_attr_num, var->varattno);
+            }
+        }
+    }
 
 	return aggstate;
 }

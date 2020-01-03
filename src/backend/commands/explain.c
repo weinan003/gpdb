@@ -2574,11 +2574,44 @@ show_tuple_split_keys(TupleSplitState *tstate, List *ancestors,
 
     ancestors = lcons(tstate, ancestors);
 
-    if (plan->numDisCols > 0)
-        show_sort_group_keys(outerPlanState(tstate), "Split by Col",
-                             plan->numDisCols, plan->distColIdx,
-                             NULL, NULL, NULL,
-                             ancestors, es);
+    List	   *context;
+    bool		useprefix;
+    List	   *result = NIL;
+    PlanState *planstate = outerPlanState(tstate);
+    /* Set up deparsing context */
+    context = set_deparse_context_planstate(es->deparse_cxt,
+                                            (Node *) planstate,
+                                            ancestors);
+    useprefix = (list_length(es->rtable) > 1 || es->verbose);
+
+    StringInfoData buf;
+    initStringInfo(&buf);
+
+    for (int i = 0; i < plan->numDisCols; i++)
+    {
+        Bitmapset *bm = bms_copy(plan->dqa_args_attr_num[i]);
+        int key;
+        resetStringInfo(&buf);
+        appendStringInfoChar(&buf, '(');
+        while ((key = bms_first_member(bm)) >= 0)
+        {
+            TargetEntry *target = get_tle_by_resno(planstate->plan->targetlist, (AttrNumber )key);
+            char	   *exprstr;
+
+            if (!target)
+                elog(ERROR, "no tlist entry for key %d", key);
+            /* Deparse the expression, showing any top-level cast */
+            exprstr = deparse_expression((Node *) target->expr, context,
+                                         useprefix, true);
+
+            appendStringInfoString(&buf, exprstr);
+            appendStringInfoChar(&buf, ',');
+        }
+        buf.data[buf.len - 1] = ')';
+
+        result = lappend(result, pstrdup(buf.data));
+    }
+    ExplainPropertyList("Split by Col", result, es);
 
     if (plan->numCols > 0)
         show_sort_group_keys(outerPlanState(tstate), "Group Key",

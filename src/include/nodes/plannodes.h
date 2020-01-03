@@ -1146,8 +1146,16 @@ typedef struct TupleSplit
     int			numCols;		/* number of grouping columns */
     AttrNumber *grpColIdx;		/* their indexes in the target list */
 
-    int         numDisCols;
-    AttrNumber  *distColIdx;
+    int         numDisCols;     /* indecate the number of different dqa exprs */
+
+    /* Bitmapset for DQA args' AttrNumber. The number of Bitmapset is 2 * numDisCols.
+     * The 0 to (numDisCols - 1) slots are input tuple AttrNumber bitmap set,
+     * which help TupleSplit executor split tuple.
+     * The number of numDisCols to (2 * numDisCols - 1) slots are output tuple AttrNumber
+     * bitmap set, which give an indicate to upper partial agg trans function recognize
+     * their relevant tuple in advance_aggregates function.
+     */
+    Bitmapset   **dqa_args_attr_num;
 } TupleSplit;
 
 /* ----------------
