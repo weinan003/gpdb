@@ -1782,7 +1782,7 @@ create_tup_split_plan(PlannerInfo *root, TupleSplitPath *best_path)
                           list_length(best_path->groupClause),
                           extract_grouping_cols(best_path->groupClause,
                                                 subplan->targetlist),
-                          subplan);
+                          best_path->mixed_dqa, subplan);
 
     copy_generic_path_info(&plan->plan, (Path *) best_path);
 
@@ -7437,7 +7437,7 @@ TupleSplit *
 make_tup_split(List *tlist,
                int numDQAs, Bitmapset **dqas_ref_bms,
                int numGroupCols, AttrNumber *grpColIdx,
-               Plan *lefttree)
+               bool mixed_dqa, Plan *lefttree)
 {
     TupleSplit *node = makeNode(TupleSplit);
     Plan	   *plan = &node->plan;
@@ -7445,6 +7445,7 @@ make_tup_split(List *tlist,
     node->numCols = numGroupCols;
     node->grpColIdx = grpColIdx;
     node->numDisCols = numDQAs;
+    node->mixed_dqa = mixed_dqa;
 
     node->dqa_args_attr_num = palloc0(sizeof(Bitmapset *) * numDQAs * 2);
     for (int id = 0; id < numDQAs; id++)

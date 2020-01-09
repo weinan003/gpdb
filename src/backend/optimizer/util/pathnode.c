@@ -4115,7 +4115,8 @@ create_tup_split_path(PlannerInfo *root,
 					  PathTarget *target,
 					  List *groupClause,
 					  Bitmapset **bitmapset,
-					  int bmSz)
+					  int bmSz,
+					  bool mixed_dqa)
 {
     TupleSplitPath *pathnode = makeNode(TupleSplitPath);
 
@@ -4133,6 +4134,8 @@ create_tup_split_path(PlannerInfo *root,
 
     pathnode->subpath = subpath;
     pathnode->groupClause = groupClause;
+
+    pathnode->mixed_dqa = mixed_dqa;
 
     pathnode->dqas_num = bmSz;
 

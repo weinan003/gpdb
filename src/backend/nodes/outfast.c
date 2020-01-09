@@ -397,6 +397,7 @@ _outTupleSplit(StringInfo str, TupleSplit *node)
 
     _outPlanInfo(str, (Plan *) node);
 
+    WRITE_BOOL_FIELD(mixed_dqa);
     WRITE_INT_FIELD(numCols);
     WRITE_INT_ARRAY(grpColIdx, node->numCols, AttrNumber);
     WRITE_INT_FIELD(numDisCols);

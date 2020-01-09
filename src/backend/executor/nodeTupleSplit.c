@@ -88,6 +88,8 @@ TupleSplitState *ExecInitTupleSplit(TupleSplit *node, EState *estate, int eflags
     for (int i = 0; i < node->numDisCols; i++)
         tup_spl_state->all_dist_attr_num = bms_add_members(tup_spl_state->all_dist_attr_num, node->dqa_args_attr_num[i]);
 
+    tup_spl_state->send_orig = false;
+
     return tup_spl_state;
 }
 
@@ -107,6 +109,26 @@ struct TupleTableSlot *ExecTupleSplit(TupleSplitState *node)
 
     econtext = node->ss.ps.ps_ExprContext;
     plan = (TupleSplit *)node->ss.ps.plan;
+
+    /* For mixed dqa send original tuple before fetch new input one up */
+    if(node->send_orig)
+    {
+        bool *isnull = slot_get_isnull(node->outerslot);
+        memcpy(isnull, node->isnull_orig, node->outerslot->PRIVATE_tts_nvalid);
+
+        node->currentExprId = 0;
+
+        econtext->ecxt_outertuple = node->outerslot;
+        ResetExprContext(econtext);
+
+        ExprDoneCond isDone;
+
+        result = ExecProject(node->ss.ps.ps_ProjInfo, &isDone);
+
+        node->send_orig = false;
+
+        return result;
+    }
 
     if (node->idx == 0)
     {
@@ -143,7 +165,8 @@ struct TupleTableSlot *ExecTupleSplit(TupleSplitState *node)
 
         isnull[attno - 1] = true;
     }
-    node->currentExprId = node->idx;
+
+    node->currentExprId = node->idx + 1;
 
     node->idx = (node->idx + 1) % plan->numDisCols;
 
@@ -153,6 +176,13 @@ struct TupleTableSlot *ExecTupleSplit(TupleSplitState *node)
     ExprDoneCond isDone;
 
     result = ExecProject(node->ss.ps.ps_ProjInfo, &isDone);
+
+    /*
+     * set the flag to true if all DQA exprs have been splited
+     * and the query is a mixed dqa.
+     */
+    node->send_orig =
+            (node->idx == 0 && node->send_orig != plan->mixed_dqa);
 
     return result;
 }
@@ -183,6 +213,7 @@ void ExecEndTupleSplit(TupleSplitState *node)
 void ExecReScanTupleSplit(TupleSplitState *node)
 {
     node->idx = 0;
+    node->send_orig = false;
 
     if (node->ss.ps.lefttree->chgParam == NULL)
         ExecReScan(node->ss.ps.lefttree);
@@ -190,5 +221,6 @@ void ExecReScanTupleSplit(TupleSplitState *node)
 
 void ExecSquelchTupleSplit(TupleSplitState *node)
 {
+    node->send_orig = false;
     ExecSquelchNode(outerPlanState(node));
 }

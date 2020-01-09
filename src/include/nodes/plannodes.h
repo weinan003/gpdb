@@ -1143,6 +1143,8 @@ typedef struct TupleSplit
 {
     Plan		plan;
 
+    bool        mixed_dqa;      /* mixed_dqa will un-split tuple once */
+
     int			numCols;		/* number of grouping columns */
     AttrNumber *grpColIdx;		/* their indexes in the target list */
 

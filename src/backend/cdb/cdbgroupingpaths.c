@@ -35,10 +35,10 @@
 
 typedef enum
 {
-	INVALID_DQA = -1,
-	SINGLE_DQA, /* only contain an unique DQA expr */
-	MULTI_DQAS, /* contain multiple DQA exprs */
-	MIXED_DQAS  /* mixed DQA and Agg */
+    INVALID_DQA = -1,
+    SINGLE_DQA, /* only contain an unique DQA expr */
+    MULTI_DQAS, /* contain multiple DQA exprs */
+    MIXED_DQAS  /* mixed DQA and Agg */
 } DQAType;
 
 /*
@@ -110,7 +110,8 @@ fetch_multi_dqas_info(PlannerInfo *root,
 					  cdb_multi_dqas_info *info);
 
 static DQAType
-recognise_dqa_type(cdb_agg_planning_context *ctx);
+recognise_dqa_type(PlannerInfo *root,
+                   cdb_agg_planning_context *ctx);
 
 static PathTarget *
 strip_aggdistinct(PathTarget *target);
@@ -214,8 +215,9 @@ cdb_create_twostage_grouping_paths(PlannerInfo *root,
 		 * Try possible plans for DISTINCT-qualified aggregate.
 		 */
 		cdb_multi_dqas_info info = {};
-		DQAType type = recognise_dqa_type(&cxt);
-		switch (type)
+		info.type = recognise_dqa_type(root, &cxt);
+
+		switch (info.type)
 		{
 			case SINGLE_DQA:
 			{
@@ -230,6 +232,7 @@ cdb_create_twostage_grouping_paths(PlannerInfo *root,
 			}
 				break;
 			case MULTI_DQAS:
+            case MIXED_DQAS:
 			{
 				fetch_multi_dqas_info(root, cheapest_path, &cxt, &info);
 
@@ -240,11 +243,6 @@ cdb_create_twostage_grouping_paths(PlannerInfo *root,
 											 &info);
 			}
 				break;
-			case MIXED_DQAS:
-				/*
-				 * GPDB_96_MERGE_FIXME: MIXED DISTINCT-Qualified Aggregates and Aggregagtes Path
-				 * not re-implemented yet
-				 */
 			default:
 				break;
 		}
@@ -261,7 +259,6 @@ add_twostage_group_agg_path(PlannerInfo *root,
 	Query	   *parse = root->parse;
 	CdbPathLocus singleQE_locus;
 	Path	   *initial_agg_path;
-	DQAType     dqa_type;
 	CdbPathLocus group_locus;
 	bool		need_redistribute;
 
@@ -282,9 +279,9 @@ add_twostage_group_agg_path(PlannerInfo *root,
 
 		bool		distinct_need_redistribute;
 
-		dqa_type = recognise_dqa_type(ctx);
+		info.type = recognise_dqa_type(root, ctx);
 
-		if (dqa_type != SINGLE_DQA)
+		if (info.type != SINGLE_DQA)
 			return;
 
 		fetch_single_dqa_info(root, path, ctx, &info);
@@ -751,7 +748,8 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
                                           info->tup_split_target,
                                           root->parse->groupClause,
                                           info->agg_args_id_bm,
-                                          info->num_bms);
+                                          info->num_bms,
+                                          info->type == MIXED_DQAS);
 
 	AggClauseCosts DedupCost = {};
     get_agg_clause_costs(root, (Node *) info->tup_split_target->exprs,
@@ -759,7 +757,7 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
                          &DedupCost);
 
 
-	if (gp_enable_dqa_pruning)
+	if (gp_enable_dqa_pruning && info->type == MULTI_DQAS)
     {
         path = (Path *) create_agg_path(root,
                                         output_rel,
@@ -992,7 +990,7 @@ cdb_choose_grouping_locus(PlannerInfo *root, Path *path,
 }
 
 static DQAType
-recognise_dqa_type(cdb_agg_planning_context *ctx)
+recognise_dqa_type(PlannerInfo *root, cdb_agg_planning_context *ctx)
 {
 	ListCell    *lc, *lcc;
 	List        *dqaArgs = NIL;
@@ -1050,7 +1048,14 @@ recognise_dqa_type(cdb_agg_planning_context *ctx)
 
 				if (!aggref->aggdistinct)
 				{
-					/* mixing DISTINCT and non-DISTINCT aggs */
+				    /*
+				     * A query have group by and DQA mixed with normal Agg
+				     * handle this kind of query in normal two stage Aggregation
+				     * so just return an invalid to skip tuple split mpp path.
+				     */
+				    if(root->parse->groupClause)
+				        return INVALID_DQA;
+
 					return MIXED_DQAS;
 				}
 			}

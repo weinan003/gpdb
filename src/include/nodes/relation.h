@@ -1721,6 +1721,8 @@ typedef struct TupleSplitPath
 
     int         dqas_num;       /* AGG_SPLIT store dqa args number of bitmaps */
     Bitmapset   **agg_args_id_bm;  /* AGG_SPLIT store dqa args Index bitmaps */
+
+    bool        mixed_dqa;      /* mixed_dqa will un-split tuple once */
 } TupleSplitPath;
 
 /*

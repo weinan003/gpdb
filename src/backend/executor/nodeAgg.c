@@ -761,8 +761,18 @@ advance_aggregates(AggState *aggstate, AggStatePerGroup pergroup)
 
             exprid = input_vtup[aggstate->agg_expr_id - 1];
 
-            if( !bms_equal(pertrans->dqa_args_attr_num, aggstate->dqa_args_attr_num[exprid]))
-                continue;
+            if(exprid == 0 )
+            {
+                /* current input tuple is unsplit tuple, only for normal agg */
+                if(!bms_is_empty(pertrans->dqa_args_attr_num))
+                    continue;
+            }
+            else
+            {
+                /* current input tuple is split tuple, trans bitmap should match tuple's bitmap */
+                if (!bms_equal(pertrans->dqa_args_attr_num, aggstate->dqa_args_attr_num[exprid - 1]))
+                    continue;
+            }
         }
 
 		if (pertrans->numSortCols > 0)
@@ -2937,6 +2947,9 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
         for (i = 0; i < aggstate->numtrans; i ++)
         {
             AggStatePerTrans pertrans = &aggstate->pertrans[i];
+
+            if (tupleSplit->mixed_dqa && (pertrans->numDistinctCols == 0))
+                continue;
 
             foreach(l, pertrans->args)
             {

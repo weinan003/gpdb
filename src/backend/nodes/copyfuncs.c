@@ -1181,6 +1181,7 @@ _copyTupleSplit(const TupleSplit *from)
     TupleSplit  *newnode = makeNode(TupleSplit);
 
     CopyPlanFields((const Plan *) from, (Plan *) newnode);
+    COPY_SCALAR_FIELD(mixed_dqa);
     COPY_SCALAR_FIELD(numCols);
     if (from->numCols > 0)
     {

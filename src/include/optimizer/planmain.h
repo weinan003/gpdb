@@ -181,7 +181,7 @@ extern Limit *make_limit(Plan *lefttree, Node *limitOffset, Node *limitCount);
 extern TupleSplit *make_tup_split(List *tlist,
                                   int numDQAs, Bitmapset **dqas_ref_bms,
                                   int numGroupCols, AttrNumber *grpColIdx,
-                                  Plan *lefttree);
+                                  bool mixed_dqa, Plan *lefttree);
 
 /*
  * prototypes for plan/initsplan.c

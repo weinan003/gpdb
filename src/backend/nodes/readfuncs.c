@@ -3081,6 +3081,8 @@ _readTupleSplit(void)
 
     ReadCommonPlan(&local_node->plan);
 
+    READ_BOOL_FIELD(mixed_dqa);
+
     READ_INT_FIELD(numCols);
     READ_ATTRNUMBER_ARRAY(grpColIdx, local_node->numCols);
     READ_INT_FIELD(numDisCols);

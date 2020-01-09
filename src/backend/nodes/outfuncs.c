@@ -993,6 +993,7 @@ _outTupleSplit(StringInfo str, const TupleSplit *node)
 
     _outPlanInfo(str, (const Plan *) node);
 
+    WRITE_BOOL_FIELD(mixed_dqa);
     WRITE_INT_FIELD(numCols);
     appendStringInfoString(str, " :grpColIdx");
     for (i = 0; i < node->numCols; i++)

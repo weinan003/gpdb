@@ -2702,6 +2702,7 @@ typedef struct TupleSplitState
     Bitmapset       *grpbySet;
 
     int             idx;
+    bool            send_orig;
     TupleTableSlot  *outerslot;
     Index           currentExprId;
     Bitmapset       *all_dist_attr_num;
