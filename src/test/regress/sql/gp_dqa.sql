@@ -69,46 +69,46 @@ explain (costs off) select sum(distinct d), count(distinct i), count(distinct c)
 
 -- multi args singledqa
 select corr(distinct d, i) from dqa_t1;
-explain select corr(distinct d, i) from dqa_t1;
+explain (costs off) select corr(distinct d, i) from dqa_t1;
 
 -- multi args singledqa with group by
 select corr(distinct d, i) from dqa_t1 group by d;
-explain select corr(distinct d, i) from dqa_t1 group by d;
+explain (costs off) select corr(distinct d, i) from dqa_t1 group by d;
 
 select corr(distinct d, i) from dqa_t1 group by c;
-explain select corr(distinct d, i) from dqa_t1 group by c;
+explain (costs off) select corr(distinct d, i) from dqa_t1 group by c;
 
 -- multi args multidqa 
 select count(distinct c), corr(distinct d, i) from dqa_t1;
-explain select count(distinct c), corr(distinct d, i) from dqa_t1;
+explain (costs off) select count(distinct c), corr(distinct d, i) from dqa_t1;
 
 select count(distinct d), corr(distinct d, i) from dqa_t1;
-explain select count(distinct d), corr(distinct d, i) from dqa_t1;
+explain (costs off) select count(distinct d), corr(distinct d, i) from dqa_t1;
 
 select count(distinct d), count(distinct i), corr(distinct d, i) from dqa_t1;
-explain select count(distinct d), count(distinct i), corr(distinct d, i) from dqa_t1;
+explain (costs off) select count(distinct d), count(distinct i), corr(distinct d, i) from dqa_t1;
 
 select count(distinct c), count(distinct d), count(distinct i), corr(distinct d, i) from dqa_t1;
-explain select count(distinct c), count(distinct d), count(distinct i), corr(distinct d, i) from dqa_t1;
+explain (costs off) select count(distinct c), count(distinct d), count(distinct i), corr(distinct d, i) from dqa_t1;
 
 -- multi args multidqa with group by
 select count(distinct c), corr(distinct d, i), d from dqa_t1 group by d;
-explain select count(distinct c), corr(distinct d, i), d from dqa_t1 group by d;
+explain (costs off) select count(distinct c), corr(distinct d, i), d from dqa_t1 group by d;
 
 select count(distinct c), corr(distinct d, i), d, i from dqa_t1 group by d,i;
-explain select count(distinct c), corr(distinct d, i), d, i from dqa_t1 group by d,i;
+explain (costs off) select count(distinct c), corr(distinct d, i), d, i from dqa_t1 group by d,i;
 
 select count(distinct c), corr(distinct d, i), dt from dqa_t1 group by dt;
-explain select count(distinct c), corr(distinct d, i), dt from dqa_t1 group by dt;
+explain (costs off) select count(distinct c), corr(distinct d, i), dt from dqa_t1 group by dt;
 
 select count(distinct d), corr(distinct d, i), i from dqa_t1 group by i;
-explain select count(distinct d), corr(distinct d, i), i from dqa_t1 group by i;
+explain (costs off) select count(distinct d), corr(distinct d, i), i from dqa_t1 group by i;
 
 select count(distinct d), corr(distinct d, i), d from dqa_t1 group by d;
-explain select count(distinct d), corr(distinct d, i), d from dqa_t1 group by d;
+explain (costs off) select count(distinct d), corr(distinct d, i), d from dqa_t1 group by d;
 
 select count(distinct d), corr(distinct d, i), c from dqa_t1 group by c;
-explain select count(distinct d), corr(distinct d, i), c from dqa_t1 group by c;
+explain (costs off) select count(distinct d), corr(distinct d, i), c from dqa_t1 group by c;
 
 -- MPP-19037
 drop table if exists fact_route_aggregation;
