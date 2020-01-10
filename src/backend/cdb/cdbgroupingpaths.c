@@ -741,7 +741,7 @@ add_multi_dqas_hash_agg_path(PlannerInfo *root,
 	 *        -> Partial Aggregate
 	 *             -> HashAggregate, to remote duplicates
 	 *                  -> Redistribute Motion
-	 *                       -> Split Ordered Aggregate  (Split tuple according to DISTINCT expr)
+	 *                       -> TupleSplit (according to DISTINCT expr)
 	 *                            -> input
 	 */
 

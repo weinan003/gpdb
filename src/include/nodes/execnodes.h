@@ -2688,10 +2688,8 @@ typedef struct AggState
 	 */
 	bool		ps_TupFromTlist;
 
-    /* if input tuple contain AggExprId, save the tlist index */
-	Index       agg_expr_id;
-
-	Bitmapset   **dqa_args_attr_num;
+    /* if input tuple contain AggExprId, save the Attribute Number */
+	Index       AggExprId_AttrNum;
 } AggState;
 
 typedef struct TupleSplitState

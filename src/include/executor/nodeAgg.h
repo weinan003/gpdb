@@ -206,8 +206,8 @@ typedef struct AggStatePerTransData
 	 */
 	FunctionCallInfoData combinefn_fcinfo;
 
-	/* args AttrNumber bitmap, which work for MultiDQA split tuple check */
-	Bitmapset           *dqa_args_attr_num;
+	/* for MultiDQA split tuple check */
+	int     agg_expr_id;
 }	AggStatePerTransData;
 
 /*

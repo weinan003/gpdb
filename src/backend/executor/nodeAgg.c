@@ -754,14 +754,14 @@ advance_aggregates(AggState *aggstate, AggStatePerGroup pergroup)
         slot_getallattrs(slot);
 
         /* if AggExprId in input, trans function bitmap should match */
-        if(aggstate->agg_expr_id > 0)
+        if(aggstate->AggExprId_AttrNum > 0)
         {
             AttrNumber exprid;
             Datum *input_vtup = aggstate->tmpcontext->ecxt_outertuple->PRIVATE_tts_values;
 
-            exprid = input_vtup[aggstate->agg_expr_id - 1];
+            exprid = input_vtup[aggstate->AggExprId_AttrNum - 1];
 
-            if( !bms_equal(pertrans->dqa_args_attr_num, aggstate->dqa_args_attr_num[exprid]))
+            if (exprid != pertrans->agg_expr_id)
                 continue;
         }
 
@@ -2922,21 +2922,22 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 	aggstate->mem_manager.manager = aggstate;
 	aggstate->mem_manager.realloc_ratio = 1;
 
-	aggstate->agg_expr_id = node->agg_expr_id;
+	aggstate->AggExprId_AttrNum = node->agg_expr_id;
 
 	/* > 0: there is a TupleSplit node under agg */
-	if(aggstate->agg_expr_id > 0)
+	if(aggstate->AggExprId_AttrNum > 0)
     {
         List *allTupleSplit = extract_nodes_plan((Plan*) node, T_TupleSplit, false);
         Assert(list_length(allTupleSplit) == 1);
 
         /* fetch TupleSplit provided bitmap sets for each trans function */
         TupleSplit *tupleSplit = linitial(allTupleSplit);
-        aggstate->dqa_args_attr_num = &tupleSplit->dqa_args_attr_num[tupleSplit->numDisCols];
+        Bitmapset **dqa_args_attr_num = &tupleSplit->dqa_args_attr_num[tupleSplit->numDisCols];
 
         for (i = 0; i < aggstate->numtrans; i ++)
         {
             AggStatePerTrans pertrans = &aggstate->pertrans[i];
+            Bitmapset *args_attr_num = NULL;
 
             foreach(l, pertrans->args)
             {
@@ -2947,9 +2948,20 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 
                 Var *var = (Var *)gExpr->arg->expr;
 
-                pertrans->dqa_args_attr_num =
-                        bms_add_member(pertrans->dqa_args_attr_num, var->varattno);
+                args_attr_num =
+                        bms_add_member(args_attr_num, var->varattno);
             }
+
+            for(j = 0; j < tupleSplit->numDisCols; j++)
+            {
+                if (bms_equal(args_attr_num, dqa_args_attr_num[j]))
+                {
+                    pertrans->agg_expr_id = j;
+                    break;
+                }
+            }
+
+            bms_free(args_attr_num);
         }
     }
 
