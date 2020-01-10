@@ -401,8 +401,8 @@ _outTupleSplit(StringInfo str, TupleSplit *node)
     WRITE_INT_ARRAY(grpColIdx, node->numCols, AttrNumber);
     WRITE_INT_FIELD(numDisCols);
 
-    for (int i = 0; i < node->numDisCols * 2; i ++)
-        WRITE_BITMAPSET_FIELD(dqa_args_attr_num[i]);
+    for (int i = 0; i < node->numDisCols ; i ++)
+        WRITE_BITMAPSET_FIELD(dqa_args_id_bm[i]);
 }
 
 static void

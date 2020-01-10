@@ -2702,6 +2702,8 @@ typedef struct TupleSplitState
     int             idx;
     TupleTableSlot  *outerslot;
     Index           currentExprId;
+
+    Bitmapset       **dqa_args_attr_num;
     Bitmapset       *all_dist_attr_num;
 } TupleSplitState;
 

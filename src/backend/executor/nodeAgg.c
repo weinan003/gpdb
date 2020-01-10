@@ -2932,7 +2932,19 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 
         /* fetch TupleSplit provided bitmap sets for each trans function */
         TupleSplit *tupleSplit = linitial(allTupleSplit);
-        Bitmapset **dqa_args_attr_num = &tupleSplit->dqa_args_attr_num[tupleSplit->numDisCols];
+        Bitmapset **dqa_args_attr_num = palloc0(sizeof(Bitmapset *) * tupleSplit->numDisCols);
+
+        for (i = 0; i < tupleSplit->numDisCols; i ++)
+        {
+            Bitmapset *bms = tupleSplit->dqa_args_id_bm[i];
+
+            j = -1;
+            while ((j = bms_next_member(bms, j)) >= 0)
+            {
+                TargetEntry *te = get_sortgroupref_tle((Index)j, tupleSplit->plan.targetlist);
+                dqa_args_attr_num[i] = bms_add_member(dqa_args_attr_num[i], te->resno);
+            }
+        }
 
         for (i = 0; i < aggstate->numtrans; i ++)
         {

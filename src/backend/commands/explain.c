@@ -47,6 +47,7 @@
 
 #include "cdb/cdbgang.h"
 #include "executor/execDynamicScan.h"
+#include "optimizer/tlist.h"
 
 #ifdef USE_ORCA
 extern char *SerializeDXLPlan(Query *parse);
@@ -2589,19 +2590,19 @@ show_tuple_split_keys(TupleSplitState *tstate, List *ancestors,
 
     for (int i = 0; i < plan->numDisCols; i++)
     {
-        Bitmapset *bm = bms_copy(plan->dqa_args_attr_num[i]);
-        int key;
+        int id = -1;
+        Bitmapset *bm = plan->dqa_args_id_bm[i];
         resetStringInfo(&buf);
         appendStringInfoChar(&buf, '(');
-        while ((key = bms_first_member(bm)) >= 0)
+        while ((id = bms_next_member(bm, id)) >= 0)
         {
-            TargetEntry *target = get_tle_by_resno(planstate->plan->targetlist, (AttrNumber )key);
+            TargetEntry *te = get_sortgroupref_tle((Index)id, planstate->plan->targetlist);
             char	   *exprstr;
 
-            if (!target)
-                elog(ERROR, "no tlist entry for key %d", key);
+            if (!te)
+                elog(ERROR, "no tlist entry for sort key: %d", id);
             /* Deparse the expression, showing any top-level cast */
-            exprstr = deparse_expression((Node *) target->expr, context,
+            exprstr = deparse_expression((Node *) te->expr, context,
                                          useprefix, true);
 
             appendStringInfoString(&buf, exprstr);

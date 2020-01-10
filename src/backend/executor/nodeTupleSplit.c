@@ -82,11 +82,21 @@ TupleSplitState *ExecInitTupleSplit(TupleSplit *node, EState *estate, int eflags
      */
     tup_spl_state->isnull_orig = (bool *) palloc0(sizeof(bool) * list_length(outerPlan(node)->targetlist));
 
+    tup_spl_state->dqa_args_attr_num = palloc0(sizeof(Bitmapset *) * node->numDisCols);
+    for (int i = 0; i < node->numDisCols; i ++)
+    {
+        int j = -1;
+        while ((j = bms_next_member(node->dqa_args_id_bm[i], j)) >= 0)
+        {
+            TargetEntry *te = get_sortgroupref_tle((Index)j, node->plan.lefttree->targetlist);
+            tup_spl_state->dqa_args_attr_num[i] = bms_add_member(tup_spl_state->dqa_args_attr_num[i], te->resno);
+        }
+    }
     /*
      * add all DQA expr AttrNum into a bitmapset
      */
     for (int i = 0; i < node->numDisCols; i++)
-        tup_spl_state->all_dist_attr_num = bms_add_members(tup_spl_state->all_dist_attr_num, node->dqa_args_attr_num[i]);
+        tup_spl_state->all_dist_attr_num = bms_add_members(tup_spl_state->all_dist_attr_num, tup_spl_state->dqa_args_attr_num[i]);
 
     return tup_spl_state;
 }
@@ -134,7 +144,7 @@ struct TupleTableSlot *ExecTupleSplit(TupleSplitState *node)
             continue;
 
         /* If the column is relevant to current dqa skip it */
-        if(bms_is_member(attno, plan->dqa_args_attr_num[node->idx]))
+        if(bms_is_member(attno, node->dqa_args_attr_num[node->idx]))
             continue;
 
         /* If the column does not belone to any DQA, skip it */
