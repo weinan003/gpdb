@@ -348,7 +348,6 @@ add_twostage_group_agg_path(PlannerInfo *root,
 	DQAType     dqa_type;
 	CdbPathLocus group_locus;
 	bool		need_redistribute;
-	int			extra_aggsplitops = 0;
 	List		*motion_pathkeys = NIL;
 	List		*grouping_sets_tlist = NIL;
 	List		*grouping_sets_groupClause = NIL;
