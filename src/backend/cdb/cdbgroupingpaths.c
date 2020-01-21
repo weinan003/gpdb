@@ -184,15 +184,15 @@ cdb_create_twostage_grouping_paths(PlannerInfo *root,
 	if (!CdbPathLocus_IsPartitioned(cheapest_path->locus))
 		return;
 
-	memset(&cxt, 0, sizeof(cxt));
-	cxt.target = target;
-	cxt.partial_grouping_target = partial_grouping_target;
-	cxt.dNumGroups = dNumGroups;
-	cxt.agg_costs = agg_costs;
-	cxt.agg_partial_costs = agg_partial_costs;
-	cxt.agg_final_costs = agg_final_costs;
-	cxt.rollup_lists = rollup_lists;
-	cxt.rollup_groupclauses = rollup_groupclauses;
+	memset(&ctx, 0, sizeof(ctx));
+	ctx.target = target;
+	ctx.partial_grouping_target = partial_grouping_target;
+	ctx.dNumGroups = dNumGroups;
+	ctx.agg_costs = agg_costs;
+	ctx.agg_partial_costs = agg_partial_costs;
+	ctx.agg_final_costs = agg_final_costs;
+	ctx.rollup_lists = rollup_lists;
+	ctx.rollup_groupclauses = rollup_groupclauses;
 
 	/*
 	 * Consider 2-phase aggs
