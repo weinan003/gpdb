@@ -1502,7 +1502,9 @@ acquire_sample_rows_by_query(Relation onerel, int nattrs, VacAttrStats **attrsta
 							 double *totalrows, double *totaldeadrows, BlockNumber *totalblocks, bool rootonly, RowIndexes **colLargeRowIndexes)
 {
 	StringInfoData str;
+	StringInfoData sizeStr;
 	StringInfoData columnStr;
+	StringInfoData txtColumnSizeStr;
 	StringInfoData thresholdStr;
 	int			i;
 	const char *schemaName = NULL;
@@ -1515,7 +1517,8 @@ acquire_sample_rows_by_query(Relation onerel, int nattrs, VacAttrStats **attrsta
 	Datum	   *vals;
 	bool	   *nulls;
 	MemoryContext oldcxt;
-	bool	   *isVarlenaCol = (bool *) palloc(sizeof(bool)*nattrs);
+	bool	   *isVarlenaCol = (bool *) palloc(sizeof(bool) * nattrs);
+	List        *textColIdLst = NIL;
 
 	Assert(targrows > 0.0);
 
@@ -1553,6 +1556,7 @@ acquire_sample_rows_by_query(Relation onerel, int nattrs, VacAttrStats **attrsta
 	tableName = RelationGetRelationName(onerel);
 
 	initStringInfo(&columnStr);
+	initStringInfo(&txtColumnSizeStr);
 
 	if (nattrs > 0)
 	{
@@ -1576,14 +1580,20 @@ acquire_sample_rows_by_query(Relation onerel, int nattrs, VacAttrStats **attrsta
 				// truncate the value at WIDTH_THRESHOLD, to limit the amount of memory
 				// consumed by this value. Note that this should be more than enough to
 				// build bucket boundaries and that usually it will also be enough to compute
-				// reasonable NDV estimates. It will, however, result in an artificially low
-				// average width estimate for the column (similar to the varlena case below).
+				// reasonable NDV estimates. To avoid low average width estimate for the column,
+				// a supplementary query attached to directly grab column size.
 				appendStringInfo(&columnStr,
 								 "substring(Ta.%s, 1, %d) as %s",
 								 attname,
 								 WIDTH_THRESHOLD,
 								 attname);
 
+				appendStringInfo(&txtColumnSizeStr,
+				                 "sum(pg_column_size(Ta.%s)),",
+				                 attname);
+
+				attrstats[i]->stawidth_preprocess = true;
+				textColIdLst = lappend_int(textColIdLst, i);
 			}
 			// numeric can be safely ignored while considering large varlen type.
 			else if (!is_numeric && (is_varlena || is_varwidth))
@@ -1617,11 +1627,15 @@ acquire_sample_rows_by_query(Relation onerel, int nattrs, VacAttrStats **attrsta
 		appendStringInfo(&columnStr, "NULL");
 	}
 
+	txtColumnSizeStr.data[txtColumnSizeStr.len - 1] = ' ';
 	/*
 	 * If table is partitioned, we create a sample over all parts.
 	 * The external partitions are skipped.
 	 */
 	initStringInfo(&str);
+	if (textColIdLst != NIL)
+		initStringInfo(&sizeStr);
+
 	if (rel_has_external_partition(RelationGetRelid(onerel)))
 	{
 		PartitionNode *pn = get_parts(RelationGetRelid(onerel), 0 /*level*/ ,
@@ -1654,11 +1668,21 @@ acquire_sample_rows_by_query(Relation onerel, int nattrs, VacAttrStats **attrsta
 							 quote_identifier(schemaName),
 							 quote_identifier(RelationGetRelationName(rel)));
 
+			if (textColIdLst != NIL)
+				appendStringInfo(&sizeStr, "select %s from %s.%s as Ta ",
+				                 txtColumnSizeStr.data,
+				                 quote_identifier(schemaName),
+				                 quote_identifier(RelationGetRelationName(rel)));
+
 			heap_close(rel, NoLock);
 		}
 
 		appendStringInfo(&str, " %s limit %lu ",
 						 thresholdStr.data, (unsigned long) targrows);
+
+		if (textColIdLst != NIL)
+			appendStringInfo(&sizeStr, " %s limit %lu ",
+			                 thresholdStr.data, (unsigned long) targrows);
 	}
 	else
 	{
@@ -1666,6 +1690,12 @@ acquire_sample_rows_by_query(Relation onerel, int nattrs, VacAttrStats **attrsta
 						 columnStr.data,
 						 quote_identifier(schemaName),
 						 quote_identifier(tableName), thresholdStr.data, (unsigned long) targrows);
+
+		if (textColIdLst != NIL)
+			appendStringInfo(&sizeStr, "select %s from %s.%s as Ta %s limit %lu ",
+			                 txtColumnSizeStr.data,
+			                 quote_identifier(schemaName),
+			                 quote_identifier(tableName), thresholdStr.data, (unsigned long) targrows);
 	}
 
 	oldcxt = CurrentMemoryContext;
@@ -1757,6 +1787,51 @@ acquire_sample_rows_by_query(Relation onerel, int nattrs, VacAttrStats **attrsta
 	}
 
 	SPI_finish();
+
+	/* Eager calculate text column avg size by SPI */
+	if (textColIdLst != NIL)
+	{
+		uint32 spi_tuples;
+		oldcxt = CurrentMemoryContext;
+
+		if (SPI_OK_CONNECT != SPI_connect())
+			ereport(ERROR, (errcode(ERRCODE_CDB_INTERNAL_ERROR),
+				errmsg("Unable to connect to execute internal query.")));
+
+		elog(elevel, "Executing Text Column Size SQL: %s", str.data);
+
+		ret = SPI_execute(sizeStr.data, false, 0);
+		Assert(ret > 0);
+		spi_tuples = SPI_processed;
+		/* Ok, read in the tuples to *rows */
+		MemoryContextSwitchTo(oldcxt);
+
+		int *colSizeArray = palloc0(sizeof(int) * list_length(textColIdLst));
+		for (i = 0; i < spi_tuples; i++ )
+		{
+			bool isnull;
+			for (int j = 0; j < list_length(textColIdLst); j ++)
+			{
+				colSizeArray[j] +=
+					DatumGetInt32(heap_getattr(SPI_tuptable->vals[i], j + 1,
+					                           SPI_tuptable->tupdesc,
+					                           &isnull));
+
+			}
+		}
+
+		i = 0;
+		ListCell *lc;
+		foreach(lc, textColIdLst)
+		{
+			attrstats[lfirst_int(lc)]->stawidth = colSizeArray[i] / sampleTuples;
+			i ++;
+		}
+
+		pfree(colSizeArray);
+		list_free(textColIdLst);
+		SPI_finish();
+	}
 
 	return sampleTuples;
 }
@@ -2818,28 +2893,31 @@ compute_scalar_stats(VacAttrStatsP stats,
 		 * width.  We don't bother with this calculation if it's a fixed-width
 		 * type.
 		 */
-		if (is_varlena)
+		if (!stats->stawidth_preprocess)
 		{
-			total_width += VARSIZE_ANY(DatumGetPointer(value));
-
-			/*
-			 * If the value is toasted, we want to detoast it just once to
-			 * avoid repeated detoastings and resultant excess memory usage
-			 * during the comparisons.	Also, check to see if the value is
-			 * excessively wide, and if so don't detoast at all --- just
-			 * ignore the value.
-			 */
-			if (!is_text && toast_raw_datum_size(value) > WIDTH_THRESHOLD)
+			if (is_varlena)
 			{
-				toowide_cnt++;
-				continue;
+				total_width += VARSIZE_ANY(DatumGetPointer(value));
+
+				/*
+				 * If the value is toasted, we want to detoast it just once to
+				 * avoid repeated detoastings and resultant excess memory usage
+				 * during the comparisons.	Also, check to see if the value is
+				 * excessively wide, and if so don't detoast at all --- just
+				 * ignore the value.
+				 */
+				if (!is_text && toast_raw_datum_size(value) > WIDTH_THRESHOLD)
+				{
+					toowide_cnt++;
+					continue;
+				}
+				value = PointerGetDatum(PG_DETOAST_DATUM(value));
 			}
-			value = PointerGetDatum(PG_DETOAST_DATUM(value));
-		}
-		else if (is_varwidth)
-		{
-			/* must be cstring */
-			total_width += strlen(DatumGetCString(value)) + 1;
+			else if (is_varwidth)
+			{
+				/* must be cstring */
+				total_width += strlen(DatumGetCString(value)) + 1;
+			}
 		}
 
 		/* Add it to the list to be sorted */
@@ -2933,10 +3011,13 @@ compute_scalar_stats(VacAttrStatsP stats,
 		stats->stats_valid = true;
 		/* Do the simple null-frac and width stats */
 		stats->stanullfrac = (double) null_cnt / (double) samplerows;
-		if (is_varwidth)
-			stats->stawidth = total_width / (double) nonnull_cnt;
-		else
-			stats->stawidth = stats->attrtype->typlen;
+		if (!stats->stawidth_preprocess)
+		{
+			if (is_varwidth)
+				stats->stawidth = total_width / (double) nonnull_cnt;
+			else
+				stats->stawidth = stats->attrtype->typlen;
+		}
 
 		// interpolate NDV calculation based on the hll distinct count
 		// for each column in leaf partitions which will be used later

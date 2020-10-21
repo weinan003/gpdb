@@ -107,6 +107,9 @@ typedef struct VacAttrStats
 	bool	   *exprnulls;
 	int			rowstride;
 	bool		merge_stats;
+
+	/* true: stawidth is eager calculated in acquire_sample_rows_by_query */
+	bool        stawidth_preprocess;
 } VacAttrStats;
 
 typedef struct VacuumStatsContext
