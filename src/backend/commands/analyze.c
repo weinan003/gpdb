@@ -1588,8 +1588,12 @@ acquire_sample_rows_by_query(Relation onerel, int nattrs, VacAttrStats **attrsta
 								 WIDTH_THRESHOLD,
 								 attname);
 
+				/* some column already populate in txtColumnSizeStr at previous loop */
+				if (txtColumnSizeStr.len != 0)
+					appendStringInfo(&txtColumnSizeStr, ",");
+
 				appendStringInfo(&txtColumnSizeStr,
-				                 "sum(pg_column_size(Ta.%s)),",
+				                 "sum(pg_column_size(Ta.%s)) ",
 				                 attname);
 
 				attrstats[i]->stawidth_preprocess = true;
@@ -1627,7 +1631,6 @@ acquire_sample_rows_by_query(Relation onerel, int nattrs, VacAttrStats **attrsta
 		appendStringInfo(&columnStr, "NULL");
 	}
 
-	txtColumnSizeStr.data[txtColumnSizeStr.len - 1] = ' ';
 	/*
 	 * If table is partitioned, we create a sample over all parts.
 	 * The external partitions are skipped.
