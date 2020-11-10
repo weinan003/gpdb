@@ -290,7 +290,10 @@ ProcessQuery(Portal portal,
 	{
 		/* MPP-4082. Issue automatic ANALYZE if conditions are satisfied. */
 		bool inFunction = false;
-		auto_stats(cmdType, relationOid, queryDesc->es_processed, inFunction);
+		Relation r = try_relation_open(relationOid, NoLock,false);
+		if (r->rd_rel->relkind != RELKIND_FOREIGN_TABLE)
+			auto_stats(cmdType, relationOid, queryDesc->es_processed, inFunction);
+		relation_close(r, NoLock);
 	}
 
 	FreeQueryDesc(queryDesc);
