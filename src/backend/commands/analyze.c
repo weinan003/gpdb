@@ -1570,23 +1570,8 @@ acquire_sample_rows_by_query(Relation onerel, int nattrs, VacAttrStats **attrsta
 									   attrstats[i]->attr->attlen < 0);
 			bool is_numeric = attrstats[i]->attr->atttypid == NUMERICOID;
 
-			if (is_text)
-			{
-				// For text types and similar types where we can apply the substring function,
-				// truncate the value at WIDTH_THRESHOLD, to limit the amount of memory
-				// consumed by this value. Note that this should be more than enough to
-				// build bucket boundaries and that usually it will also be enough to compute
-				// reasonable NDV estimates. It will, however, result in an artificially low
-				// average width estimate for the column (similar to the varlena case below).
-				appendStringInfo(&columnStr,
-								 "substring(Ta.%s, 1, %d) as %s",
-								 attname,
-								 WIDTH_THRESHOLD,
-								 attname);
-
-			}
-			// numeric can be safely ignored while considering large varlen type.
-			else if (!is_numeric && (is_varlena || is_varwidth))
+			// numeric and text can be safely ignored while considering large varlen type.
+			if (!(is_numeric || is_text) && (is_varlena || is_varwidth))
 			{
 				appendStringInfo(&columnStr,
 								 "(case when pg_column_size(Ta.%s) > %d then NULL else Ta.%s  end) as %s, ",
