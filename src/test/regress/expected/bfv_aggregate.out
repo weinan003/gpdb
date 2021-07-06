@@ -1813,7 +1813,7 @@ select 1, median(col1) from group_by_const group by 1;
         1 |  500.5
 (1 row)
 
--- 
+--
 -- Test GROUP BY IN exists subquery
 --
 create temp table group_by_subquery(col1 int);
