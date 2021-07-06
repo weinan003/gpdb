@@ -1727,6 +1727,10 @@ simplify_EXISTS_query(PlannerInfo *root, Query *query)
 	 */
 	if (query->commandType != CMD_SELECT ||
 		query->setOperations ||
+		/*
+		 * Greenplum only skip plain Aggs, which are not in a HAVING, since
+		 * Greenplum tries to demote HAVING as above comments say.
+		 */
 		(query->hasAggs && !query->havingQual) ||
 		query->groupingSets ||
 #if 0
