@@ -1727,7 +1727,7 @@ simplify_EXISTS_query(PlannerInfo *root, Query *query)
 	 */
 	if (query->commandType != CMD_SELECT ||
 		query->setOperations ||
-		query->hasAggs ||
+		(query->hasAggs && !query->havingQual) ||
 		query->groupingSets ||
 #if 0
 		query->hasWindowFuncs ||
