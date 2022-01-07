@@ -8356,6 +8356,8 @@ ReadCheckpointRecord(XLogReaderState *xlogreader, XLogRecPtr RecPtr,
 	bool sizeOk;
 	uint32 chkpt_len;
 	uint32 chkpt_tot_len;
+	uint32 chkpt_tot_len_long;
+	bool length_match;
 
 	if (!XRecOffIsValid(RecPtr))
 	{
@@ -8442,10 +8444,13 @@ ReadCheckpointRecord(XLogReaderState *xlogreader, XLogRecPtr RecPtr,
 	sizeOk = false;
 	chkpt_len = XLogRecGetDataLen(xlogreader);
 	chkpt_tot_len = SizeOfXLogRecord + SizeOfXLogRecordDataHeaderShort + sizeof(CheckPoint);
+	chkpt_tot_len_long = SizeOfXLogRecord + SizeOfXLogRecordDataHeaderLong + sizeof(CheckPoint);
+	length_match = ((chkpt_len - sizeof(CheckPoint)) == (record->xl_tot_len - chkpt_tot_len))
+					|| ((chkpt_len - sizeof(CheckPoint)) == (record->xl_tot_len - chkpt_tot_len_long));
 	if ((chkpt_len == sizeof(CheckPoint) && record->xl_tot_len == chkpt_tot_len) ||
 		((chkpt_len > sizeof(CheckPoint) &&
 		  record->xl_tot_len > chkpt_tot_len &&
-		  ((chkpt_len - sizeof(CheckPoint)) == (record->xl_tot_len - chkpt_tot_len)))))
+		  length_match)))
 		sizeOk = true;
 
 	if (!sizeOk)
